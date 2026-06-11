@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+requests
+groq
+gtts
+supabase
+pypdf
+reportlab
+cryptography
+python-multipart
