@@ -1,9 +1,13 @@
-import axios from 'axios'
+import axios from "axios";
 
-const API = axios.create({ baseURL: 'http://localhost:8000' })
+const API = axios.create({
+  baseURL:
+    import.meta.env.VITE_API_URL ||
+    "http://localhost:8000"
+});
 
 export function setAuthToken(token) {
-  API.defaults.headers.common['authorization'] = token ? `Bearer ${token}` : ''
+  API.defaults.headers.common["authorization"] = token;
 }
 
-export default API
+export default API;
