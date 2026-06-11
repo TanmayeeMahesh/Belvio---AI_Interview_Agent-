@@ -1,3 +1,23 @@
+---
+title: Belvio AI Interview Agent
+emoji: 🎤
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
+# Belvio AI Interview Agent
+
+AI-powered interview platform using:
+- FastAPI
+- Recall.ai
+- Groq
+- Supabase
+
+Backend hosted on Hugging Face Spaces.
+
+
 # Belvio — AI Interview Agent
 
 An end-to-end automated technical interview platform. Upload a resume and job description, and Belvio handles everything — candidate analysis, question generation, email invite, live AI-conducted voice interview, scoring, and PDF report — completely autonomously.
