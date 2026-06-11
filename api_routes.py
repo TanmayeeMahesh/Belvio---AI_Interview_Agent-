@@ -1,0 +1,191 @@
+"""
+api_routes.py — HR-facing API matching the other team's frontend contract.
+
+Their React dashboard calls these (via axios at localhost:8000):
+  POST /api/analyse            multipart: resume, jd, role  → {analysis, tempFiles}
+  POST /api/schedule           json: {analysis, role, questionCount, confirmedEmail,
+                                      manualMeetingLink, meetingPlatform} → {scheduled_at, ...}
+  GET  /api/hr/sessions        → [{id, candidate_name, role, status, scheduled_at, created_at}]
+  GET  /api/hr/session/{id}    → full session detail
+  GET  /api/hr/report/{id}     → report row
+  GET  /api/hr/report/{id}/pdf → the generated PDF (download)
+  GET  /api/keys               → masked per-user API keys (sidebar)
+  POST /api/keys               json: {gemini, claude, groq} → store encrypted
+
+Wires together: extraction (US-AG-01/02), scheduler (invite+schedule), auth (login/keys),
+report_pdf (US-AG-08 AC-06), and our Supabase via db.py.
+"""
+import os, uuid, json
+from datetime import datetime, timezone, timedelta
+from fastapi import APIRouter, UploadFile, File, Form, Request, Header, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+
+import db, extraction, scheduler, auth, report_pdf, evaluator
+from supabase import create_client as _supa_create
+import os as _os
+
+router = APIRouter()
+
+UPLOAD_DIR = os.path.join("uploads", "documents")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ─── AUTH LOGIN ───────────────────────────────────────────
+@router.post("/api/auth/login")
+async def login(request: Request):
+    body = await request.json()
+    email    = (body.get("email") or "").strip()
+    password = (body.get("password") or "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password required.")
+    try:
+        sb = _supa_create(_os.getenv("SUPABASE_URL"), _os.getenv("SUPABASE_KEY"))
+        res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        token = res.session.access_token
+        return {"token": token, "email": res.user.email}
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+
+def _require_user(authorization):
+    try:
+        return auth.verify_token(authorization)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+# ─── US-AG-01: upload + parse JD/resume ───────────────────
+@router.post("/api/analyse")
+async def analyse(resume: UploadFile = File(None), jd: UploadFile = File(None),
+                  role: str = Form("Software Engineer"),
+                  authorization: str = Header(None)):
+    user = _require_user(authorization)
+    keys = auth.get_user_keys_decrypted(auth.user_id_from(user))  # per-user LLM keys
+
+    resume_text, jd_text, temp = "", "", {}
+    if resume:
+        rp = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{resume.filename}")
+        with open(rp, "wb") as f:
+            f.write(await resume.read())
+        resume_text = extraction.extract_text(rp)
+        temp["resume_path"] = rp
+    if jd:
+        jp = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{jd.filename}")
+        with open(jp, "wb") as f:
+            f.write(await jd.read())
+        jd_text = extraction.extract_text(jp)
+        temp["jd_path"] = jp
+    if not resume_text and not jd_text:
+        raise HTTPException(status_code=400, detail="Upload at least one document.")
+
+    try:
+        analysis = extraction.analyze_documents(jd_text, resume_text, role, keys=keys)
+    except extraction.llm_stack.LLMExhausted as e:
+        # signal the UI to prompt for a fresh key
+        raise HTTPException(status_code=429,
+                            detail={"error": "llm_exhausted", "providers": e.providers_tried})
+    temp["resume_text"] = resume_text
+    temp["jd_text"] = jd_text
+    return {"analysis": analysis, "tempFiles": temp}
+
+
+# ─── US-AG-02 + scheduling: generate questions, store, email, schedule bot ──
+@router.post("/api/schedule")
+async def schedule(request: Request, authorization: str = Header(None)):
+    user = _require_user(authorization)
+    uid = auth.user_id_from(user)
+    keys = auth.get_user_keys_decrypted(uid)
+    body = await request.json()
+
+    analysis      = body.get("analysis", {})
+    role          = body.get("role") or analysis.get("jobRole", "Software Engineer")
+    qcount        = int(body.get("questionCount", 12))
+    email         = (body.get("confirmedEmail") or analysis.get("candidateEmail") or "").strip()
+    meeting_url   = (body.get("manualMeetingLink") or "").strip()
+    temp          = body.get("tempFiles", {})
+    delay_minutes = int(body.get("delayMinutes", 30))
+
+    if not meeting_url:
+        raise HTTPException(status_code=400, detail="A meeting link is required.")
+
+    # 1. generate the dynamic question plan (US-AG-02)
+    try:
+        questions = extraction.generate_question_plan(analysis, role, qcount, keys=keys)
+    except extraction.llm_stack.LLMExhausted as e:
+        raise HTTPException(status_code=429,
+                            detail={"error": "llm_exhausted", "providers": e.providers_tried})
+
+    # 2. create candidate + session in OUR Supabase, store analysis + questions
+    candidate_name  = analysis.get("candidateName", "Candidate")
+    session_id = db.create_session(
+        bot_id=None, total_questions=len(questions),
+        candidate_name=candidate_name, candidate_email=email, role=role,
+        status="scheduled")
+
+    scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+    db.update_session_analysis(session_id, analysis, meeting_url, scheduled_for.isoformat(),
+                               temp.get("jd_text"), temp.get("resume_text"))
+    db.save_questions(session_id, questions)
+
+    # 3. create the scheduled-interview row (the worker auto-deploys the bot at scheduled_for)
+    sched = db.create_scheduled_interview(
+        meeting_url=meeting_url, scheduled_for_iso=scheduled_for.isoformat(),
+        candidate_email=email, candidate_name=candidate_name, role=role,
+        session_id=session_id)
+
+    # 4. email the invite now
+    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    email_ok = scheduler.send_invite(email, candidate_name, meeting_url, role=role, when=when_human) if email else False
+
+    return {"status": "scheduled", "session_id": session_id,
+            "scheduled_at": scheduled_for.isoformat().replace("+00:00", ""),
+            "email_sent": email_ok, "questions_generated": len(questions)}
+
+
+# ─── HR dashboard reads ───────────────────────────────────
+@router.get("/api/hr/sessions")
+def hr_sessions(authorization: str = Header(None)):
+    _require_user(authorization)
+    return db.list_sessions_with_reports()
+
+@router.get("/api/hr/session/{session_id}")
+def hr_session(session_id: str, authorization: str = Header(None)):
+    _require_user(authorization)
+    return db.get_session_full(session_id)
+
+@router.get("/api/hr/report/{session_id}")
+def hr_report(session_id: str, authorization: str = Header(None)):
+    _require_user(authorization)
+    return db.get_report(session_id)
+
+@router.get("/api/hr/report/{session_id}/pdf")
+def hr_report_pdf(session_id: str, authorization: str = Header(None)):
+    _require_user(authorization)
+    report = db.get_report(session_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report["session_id"] = session_id
+    report["per_topic"] = report.get("per_topic", [])
+    report["candidate"] = db.get_candidate_for_session(session_id)
+    transcript = [{"speaker": a["speaker"], "text": a["text"],
+                   "timestamp": a.get("created_at", "")} for a in db.read_answers(session_id)]
+    path = report_pdf.build_report_pdf(report, transcript, out_dir="uploads/reports")
+    return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
+
+
+# ─── API-key sidebar (per-user, encrypted, masked) ────────
+@router.get("/api/keys")
+def get_keys(authorization: str = Header(None)):
+    user = _require_user(authorization)
+    return auth.get_user_keys_masked(auth.user_id_from(user))
+
+@router.post("/api/keys")
+async def set_keys(request: Request, authorization: str = Header(None)):
+    user = _require_user(authorization)
+    body = await request.json()
+    ok = auth.save_user_keys(auth.user_id_from(user),
+                             {"gemini": body.get("gemini"), "claude": body.get("claude"),
+                              "groq": body.get("groq")})
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to save keys")
+    return {"status": "saved", "keys": auth.get_user_keys_masked(auth.user_id_from(user))}

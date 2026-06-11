@@ -1,0 +1,293 @@
+import { useState, useEffect } from 'react'
+import API from '../api'
+
+const DIM_LABELS = {
+  technical_accuracy:    'Technical Accuracy',
+  depth:                 'Depth',
+  clarity_communication: 'Clarity & Communication',
+  problem_solving:       'Problem Solving',
+}
+
+function ScoreBar({ value, max = 10 }) {
+  const pct = Math.max(0, Math.min(100, (value / max) * 100))
+  const color = pct >= 70 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444'
+  return (
+    <div className="score-bar-track" style={{ marginTop: 6 }}>
+      <div className="score-bar-fill" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  )
+}
+
+function ScoreCard({ label, value }) {
+  return (
+    <div className="card" style={{ padding: '14px 16px' }}>
+      <div className="text-xs text-secondary">{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>
+        {value != null ? value.toFixed(1) : '—'}
+        <span className="text-secondary" style={{ fontSize: 14, fontWeight: 400 }}>/10</span>
+      </div>
+      {value != null && <ScoreBar value={value} />}
+    </div>
+  )
+}
+
+function RecommendationBadge({ rec }) {
+  if (!rec) return null
+  const base = rec.replace(/ \(Incomplete Session\)$/, '')
+  const styles = {
+    'Strongly Recommended': { bg: '#ecfdf5', color: '#059669' },
+    'Recommended':           { bg: '#eff6ff', color: '#3b82f6' },
+    'Needs Further Review':  { bg: '#fffbeb', color: '#d97706' },
+    'Not Recommended':       { bg: '#fef2f2', color: '#dc2626' },
+  }
+  const s = styles[base] || { bg: '#f3f4f6', color: '#6b7280' }
+  return (
+    <span style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 999, fontWeight: 600, fontSize: 13, background: s.bg, color: s.color }}>
+      {rec}
+    </span>
+  )
+}
+
+function NarrativeSection({ title, text }) {
+  if (!text) return null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{title}</div>
+      <div className="text-sm" style={{ lineHeight: 1.7 }}>{text}</div>
+    </div>
+  )
+}
+
+export default function Reports({ token, defaultSessionId }) {
+  const [sessions, setSessions] = useState([])
+  const [selectedId, setSelectedId] = useState(defaultSessionId || '')
+  const [fullData, setFullData] = useState(null)   // {session, questions, answers, report}
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [showTranscript, setShowTranscript] = useState(false)
+
+  useEffect(() => {
+    API.get('/api/hr/sessions', { headers: { authorization: `Bearer ${token}` } })
+      .then(r => setSessions(Array.isArray(r.data) ? r.data : []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (defaultSessionId) setSelectedId(defaultSessionId)
+  }, [defaultSessionId])
+
+  useEffect(() => {
+    if (selectedId) fetchSession(selectedId)
+  }, [selectedId])
+
+  async function fetchSession(id) {
+    setLoading(true); setError(''); setFullData(null); setShowTranscript(false)
+    try {
+      const { data } = await API.get(`/api/hr/session/${id}`, { headers: { authorization: `Bearer ${token}` } })
+      setFullData(data)
+    } catch (e) {
+      setError(e.response?.status === 404 ? 'Session not found.' : 'Failed to load report.')
+    }
+    setLoading(false)
+  }
+
+  const r = fullData?.report || {}
+  const sess = fullData?.session || {}
+  const answers = fullData?.answers || []   // paired Q&A from _pair_transcript
+  const perTopic = r.per_topic || []
+  const candidateName = sess.candidate_name || sessions.find(s => s.id === selectedId)?.candidate_name || '—'
+  const candidateRole = sess.role || sessions.find(s => s.id === selectedId)?.role || '—'
+
+  async function downloadPdf(id) {
+    try {
+      const res = await API.get(`/api/hr/report/${id}/pdf`, {
+        headers: { authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      })
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url; a.download = `report_${id.slice(0, 8)}.pdf`
+      a.click(); URL.revokeObjectURL(url)
+    } catch (e) {
+      alert('PDF download failed. Check server logs.')
+    }
+  }
+
+  return (
+    <div className="page">
+      <div className="flex-between" style={{ marginBottom: 20 }}>
+        <div className="page-title" style={{ marginBottom: 0 }}>Reports</div>
+        {selectedId && fullData?.report && (
+          <button className="btn-primary btn-sm" onClick={() => downloadPdf(selectedId)}>⬇ Download PDF</button>
+        )}
+      </div>
+
+      {/* Selector */}
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
+          <select value={selectedId} onChange={e => setSelectedId(e.target.value)}>
+            <option value="">— Select a session —</option>
+            {sessions.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.candidate_name || 'Unknown'} · {s.role || '?'} · {s.status}
+                {s.overall_score != null ? ` · ${s.overall_score}/10` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        {selectedId && <button className="btn-ghost btn-sm" onClick={() => fetchSession(selectedId)}>↻</button>}
+      </div>
+
+      {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-secondary)' }}>Loading…</div>}
+      {error && <div className="text-danger text-sm">{error}</div>}
+
+      {fullData && !fullData.report && (
+        <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Report not yet generated — interview may still be in progress or pending evaluation.
+        </div>
+      )}
+
+      {fullData?.report && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {/* Header */}
+          <div className="card" style={{ padding: 20 }}>
+            <div className="flex-between" style={{ flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{candidateName}</div>
+                <div className="text-secondary text-sm">{candidateRole}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ textAlign: 'right' }}>
+                  <div className="text-xs text-secondary">Overall Score</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>
+                    {r.overall_score != null ? r.overall_score.toFixed(1) : '—'}
+                    <span className="text-secondary" style={{ fontSize: 16, fontWeight: 400 }}>/10</span>
+                  </div>
+                </div>
+                <RecommendationBadge rec={r.recommendation} />
+              </div>
+            </div>
+            {r.executive_summary && (
+              <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--bg)', borderRadius: 'var(--radius)', fontSize: 14, lineHeight: 1.6 }}>
+                {r.executive_summary}
+              </div>
+            )}
+          </div>
+
+          {/* Dimension scores */}
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 12 }}>Dimension Scores</div>
+            <div className="grid-4">
+              {Object.entries(DIM_LABELS).map(([key, label]) => (
+                <ScoreCard key={key} label={label} value={r[key]} />
+              ))}
+            </div>
+          </div>
+
+          {/* Narrative */}
+          <div className="card" style={{ padding: 20 }}>
+            <div style={{ fontWeight: 600, marginBottom: 14 }}>Evaluation</div>
+            <NarrativeSection title="Strengths" text={r.strengths} />
+            <NarrativeSection title="Gaps" text={r.gaps} />
+            <NarrativeSection title="Justification" text={r.justification} />
+          </div>
+
+          {/* Per-topic breakdown */}
+          {perTopic.length > 0 && (
+            <div className="card" style={{ overflowX: 'auto' }}>
+              <div style={{ padding: '14px 16px 10px', fontWeight: 600 }}>Per-Topic Breakdown</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Topic</th>
+                    <th>Score</th>
+                    <th>Technical</th>
+                    <th>Depth</th>
+                    <th>Clarity</th>
+                    <th>Problem Solving</th>
+                    <th>Answered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {perTopic.map((t, i) => (
+                    <tr key={i}>
+                      <td>{t.topic}</td>
+                      <td style={{ fontWeight: 600 }}>{t.topic_score?.toFixed(1) ?? '—'}</td>
+                      <td>{t.technical_accuracy ?? '—'}</td>
+                      <td>{t.depth ?? '—'}</td>
+                      <td>{t.clarity_communication ?? '—'}</td>
+                      <td>{t.problem_solving ?? '—'}</td>
+                      <td>
+                        {t.answered === false
+                          ? <span className="badge badge-incomplete">No</span>
+                          : <span className="badge badge-completed">Yes</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {perTopic.some(t => t.note) && (
+                <div style={{ padding: '0 16px 16px' }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, marginTop: 16 }}>Evaluator Notes</div>
+                  {perTopic.filter(t => t.note).map((t, i) => (
+                    <div key={i} style={{ fontSize: 13, marginBottom: 6 }}>
+                      <span style={{ fontWeight: 500 }}>{t.topic}:</span> <span className="text-secondary">{t.note}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Paired transcript */}
+          <div className="card" style={{ padding: 20 }}>
+            <button
+              className="btn-ghost"
+              onClick={() => setShowTranscript(v => !v)}
+              style={{ width: '100%', textAlign: 'left', fontWeight: 600, border: 'none', background: 'none' }}
+            >
+              {showTranscript ? '▾' : '▸'} Transcript ({answers.length} exchanges)
+            </button>
+            {showTranscript && (
+              answers.length === 0
+                ? <div className="text-secondary text-sm" style={{ marginTop: 12 }}>No transcript available.</div>
+                : <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {answers.map((pair, i) => (
+                      <div key={i} style={{ borderBottom: i < answers.length - 1 ? '1px solid var(--border)' : 'none', paddingBottom: 14 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', minWidth: 60 }}>
+                            Q{i + 1} {pair.topic ? `· ${pair.topic}` : ''}
+                          </span>
+                          {pair.overall_score != null && (
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                              score: {pair.overall_score.toFixed(1)}/10
+                            </span>
+                          )}
+                        </div>
+                        {pair.question_text && (
+                          <div style={{ marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>AI: </span>
+                            <span className="text-sm">{pair.question_text}</span>
+                          </div>
+                        )}
+                        {pair.answer_text && (
+                          <div style={{ marginBottom: pair.evaluation_note ? 4 : 0 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Candidate: </span>
+                            <span className="text-sm">{pair.answer_text}</span>
+                          </div>
+                        )}
+                        {pair.evaluation_note && (
+                          <div className="text-xs text-secondary" style={{ marginTop: 4, fontStyle: 'italic' }}>{pair.evaluation_note}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+            )}
+          </div>
+
+        </div>
+      )}
+    </div>
+  )
+}

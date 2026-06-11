@@ -1,0 +1,30 @@
+# Secrets — never push these
+.env
+frontend/.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Uploads (PDFs, reports)
+uploads/
+*.pdf
+transcript_*.json
+report_*.json
+report_*.pdf
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
