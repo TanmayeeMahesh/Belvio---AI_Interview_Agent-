@@ -13,8 +13,16 @@ function badgeClass(status) {
   return `badge ${map[s] || 'badge-capped'}`
 }
 
+function displayStatus(status) {
+  if (!status) return '—'
+  if (status.startsWith('incomplete')) return 'Incomplete'
+  if (status === 'in_progress') return 'In Progress'
+  if (status === 'no_show') return 'No Show'
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
 function StatusBadge({ status }) {
-  return <span className={badgeClass(status)}>{status?.replace(/_/g, ' ') || '—'}</span>
+  return <span className={badgeClass(status)}>{displayStatus(status)}</span>
 }
 
 function RecommendationBadge({ rec }) {
