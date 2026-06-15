@@ -8,6 +8,11 @@ const DIM_LABELS = {
   problem_solving:       'Problem Solving',
 }
 
+function fmtDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' })
+}
+
 function ScoreBar({ value, max = 10 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100))
   const color = pct >= 70 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444'
@@ -48,6 +53,23 @@ function RecommendationBadge({ rec }) {
   )
 }
 
+function RecommendationChip({ rec }) {
+  if (!rec) return <span className="text-secondary">—</span>
+  const base = rec.replace(/ \(Incomplete Session\)$/, '')
+  const styles = {
+    'Strongly Recommended': { bg: '#ecfdf5', color: '#059669' },
+    'Recommended':           { bg: '#eff6ff', color: '#3b82f6' },
+    'Needs Further Review':  { bg: '#fffbeb', color: '#d97706' },
+    'Not Recommended':       { bg: '#fef2f2', color: '#dc2626' },
+  }
+  const s = styles[base] || { bg: '#f3f4f6', color: '#6b7280' }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 999, fontWeight: 500, fontSize: 12, background: s.bg, color: s.color }}>
+      {base}
+    </span>
+  )
+}
+
 function NarrativeSection({ title, text }) {
   if (!text) return null
   return (
@@ -58,15 +80,10 @@ function NarrativeSection({ title, text }) {
   )
 }
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' })
-}
-
 export default function Reports({ token, defaultSessionId }) {
   const [sessions, setSessions] = useState([])
-  const [selectedId, setSelectedId] = useState(defaultSessionId || '')
-  const [fullData, setFullData] = useState(null)   // {session, questions, answers, report}
+  const [selectedId, setSelectedId] = useState('')
+  const [fullData, setFullData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showTranscript, setShowTranscript] = useState(false)
@@ -78,16 +95,28 @@ export default function Reports({ token, defaultSessionId }) {
       .catch(() => {})
   }, [])
 
+  // Open from Sessions tab "Report" button
   useEffect(() => {
-    if (defaultSessionId) setSelectedId(defaultSessionId)
+    if (defaultSessionId) openReport(defaultSessionId)
   }, [defaultSessionId])
 
-  useEffect(() => {
-    if (selectedId) fetchSession(selectedId)
-  }, [selectedId])
+  function openReport(id) {
+    setSelectedId(id)
+    setFullData(null)
+    setShowTranscript(false)
+    setError('')
+    fetchSession(id)
+  }
+
+  function goBack() {
+    setSelectedId('')
+    setFullData(null)
+    setShowTranscript(false)
+    setError('')
+  }
 
   async function fetchSession(id) {
-    setLoading(true); setError(''); setFullData(null); setShowTranscript(false)
+    setLoading(true); setError('')
     try {
       const { data } = await API.get(`/api/hr/session/${id}`, { headers: { authorization: `Bearer ${token}` } })
       setFullData(data)
@@ -96,21 +125,6 @@ export default function Reports({ token, defaultSessionId }) {
     }
     setLoading(false)
   }
-
-  const r = fullData?.report || {}
-  const sess = fullData?.session || {}
-  const answers = fullData?.answers || []   // paired Q&A from _pair_transcript
-  const perTopic = r.per_topic || []
-  const candidateName = sess.candidate_name || sessions.find(s => s.id === selectedId)?.candidate_name || '—'
-  const candidateRole = sess.role || sessions.find(s => s.id === selectedId)?.role || '—'
-
-  const sortedSessions = [...sessions].sort((a, b) => {
-    if (sortBy === 'date-asc') return new Date(a.scheduled_at || a.created_at || 0) - new Date(b.scheduled_at || b.created_at || 0)
-    if (sortBy === 'role') return (a.role || '').localeCompare(b.role || '')
-    if (sortBy === 'score') return (b.overall_score ?? -1) - (a.overall_score ?? -1)
-    // default: date-desc
-    return new Date(b.scheduled_at || b.created_at || 0) - new Date(a.scheduled_at || a.created_at || 0)
-  })
 
   async function downloadPdf(id) {
     try {
@@ -127,35 +141,92 @@ export default function Reports({ token, defaultSessionId }) {
     }
   }
 
+  const sessionsWithReports = sessions
+    .filter(s => s.recommendation || s.overall_score != null)
+    .sort((a, b) => {
+      if (sortBy === 'date-asc') return new Date(a.scheduled_at || a.created_at || 0) - new Date(b.scheduled_at || b.created_at || 0)
+      if (sortBy === 'role') return (a.role || '').localeCompare(b.role || '')
+      if (sortBy === 'score') return (b.overall_score ?? -1) - (a.overall_score ?? -1)
+      return new Date(b.scheduled_at || b.created_at || 0) - new Date(a.scheduled_at || a.created_at || 0)
+    })
+
+  const r = fullData?.report || {}
+  const sess = fullData?.session || {}
+  const answers = fullData?.answers || []
+  const perTopic = r.per_topic || []
+  const candidateName = sess.candidate_name || sessions.find(s => s.id === selectedId)?.candidate_name || '—'
+  const candidateRole = sess.role || sessions.find(s => s.id === selectedId)?.role || '—'
+
+  // ── Session list view ──
+  if (!selectedId) {
+    return (
+      <div className="page">
+        <div className="flex-between" style={{ marginBottom: 20 }}>
+          <div className="page-title" style={{ marginBottom: 0 }}>Reports</div>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ width: 'auto' }}>
+            <option value="date-desc">Newest first</option>
+            <option value="date-asc">Oldest first</option>
+            <option value="role">By role</option>
+            <option value="score">By score</option>
+          </select>
+        </div>
+
+        {sessionsWithReports.length === 0 ? (
+          <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-secondary)' }}>
+            No completed reports yet.
+          </div>
+        ) : (
+          <div className="card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Candidate</th>
+                  <th>Role</th>
+                  <th>Date</th>
+                  <th>Score</th>
+                  <th>Result</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessionsWithReports.map(s => (
+                  <tr key={s.id}>
+                    <td>
+                      <div className="font-semibold">{s.candidate_name || '—'}</div>
+                      {s.candidate_email && <div className="text-xs text-secondary">{s.candidate_email}</div>}
+                    </td>
+                    <td className="text-secondary">{s.role || '—'}</td>
+                    <td className="text-secondary text-sm">{fmtDate(s.scheduled_at || s.created_at)}</td>
+                    <td>
+                      {s.overall_score != null
+                        ? <span className="font-semibold">{s.overall_score.toFixed(1)}<span className="text-secondary" style={{ fontWeight: 400, fontSize: 12 }}>/10</span></span>
+                        : <span className="text-secondary">—</span>}
+                    </td>
+                    <td><RecommendationChip rec={s.recommendation} /></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button className="btn-primary btn-sm" onClick={() => openReport(s.id)}>Preview</button>
+                        <button className="btn-ghost btn-sm" onClick={() => downloadPdf(s.id)}>⬇ PDF</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Report detail view ──
   return (
     <div className="page">
       <div className="flex-between" style={{ marginBottom: 20 }}>
-        <div className="page-title" style={{ marginBottom: 0 }}>Reports</div>
-        {selectedId && fullData?.report && (
+        <button className="btn-ghost btn-sm" onClick={goBack}>← Back to reports</button>
+        {fullData?.report && (
           <button className="btn-primary btn-sm" onClick={() => downloadPdf(selectedId)}>⬇ Download PDF</button>
         )}
-      </div>
-
-      {/* Selector */}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center' }}>
-        <div style={{ flex: 1 }}>
-          <select value={selectedId} onChange={e => setSelectedId(e.target.value)}>
-            <option value="">— Select a session —</option>
-            {sortedSessions.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.candidate_name || 'Unknown'} · {s.role || '?'} · {fmtDate(s.scheduled_at || s.created_at)}
-                {s.overall_score != null ? ` · ${s.overall_score}/10` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ width: 'auto' }}>
-          <option value="date-desc">Newest first</option>
-          <option value="date-asc">Oldest first</option>
-          <option value="role">By role</option>
-          <option value="score">By score</option>
-        </select>
-        {selectedId && <button className="btn-ghost btn-sm" onClick={() => fetchSession(selectedId)}>↻</button>}
       </div>
 
       {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-secondary)' }}>Loading…</div>}

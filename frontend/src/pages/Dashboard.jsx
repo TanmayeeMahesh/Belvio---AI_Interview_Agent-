@@ -135,6 +135,7 @@ export default function Dashboard({ token }) {
   }
 
   async function handleSchedule() {
+    if (!email.trim()) { setScheduleError('Candidate email is required to send the invite.'); return }
     if (!meetingUrl.trim()) { setScheduleError('Meeting link is required.'); return }
     setScheduleLoading(true); setScheduleError('')
     try {
@@ -251,10 +252,7 @@ export default function Dashboard({ token }) {
           <div style={{ fontWeight: 600, marginBottom: 14 }}>Schedule Interview</div>
           <div className="grid-2" style={{ marginBottom: 14 }}>
             <div>
-              <label>
-                Candidate Email
-                <span className="text-secondary" style={{ fontWeight: 400, marginLeft: 4 }}>(optional — needed to send invite)</span>
-              </label>
+              <label>Candidate Email</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="candidate@example.com" />
             </div>
             <div>
@@ -297,7 +295,7 @@ export default function Dashboard({ token }) {
             <div>
               <div className="text-xs text-secondary">Email invite</div>
               <div className={scheduled.email_sent ? 'text-success' : 'text-danger'}>
-                {scheduled.email_sent ? '✓ Sent' : email ? '✗ Not sent (check Gmail config)' : '— No email provided'}
+                {scheduled.email_sent ? '✓ Sent' : '✗ Not sent (check email config in .env)'}
               </div>
             </div>
           </div>

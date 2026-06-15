@@ -205,7 +205,7 @@ export default function Sessions({ token, onViewReport }) {
                   <td>
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       <button className="btn-ghost btn-sm" onClick={() => setPlanFor(s.id)}>Plan</button>
-                      {s.status && s.status !== 'scheduled' && (
+                      {s.status && !['scheduled', 'completed'].includes(s.status) && (
                         <button className="btn-ghost btn-sm" onClick={() => setReasonFor(s)}>Reason</button>
                       )}
                       {(s.recommendation || s.overall_score != null) && (
@@ -236,15 +236,9 @@ export default function Sessions({ token, onViewReport }) {
               <StatusBadge status={reasonFor.status} />
             </div>
             <div>
-              <div className="text-xs text-secondary">Questions answered</div>
-              <div>{reasonFor.questions_answered ?? reasonFor.question_count ?? '—'}</div>
+              <div className="text-xs text-secondary">Questions reached</div>
+              <div>{reasonFor.questions_reached ?? '—'}</div>
             </div>
-            {reasonFor.completion_reason && (
-              <div>
-                <div className="text-xs text-secondary">Completion reason</div>
-                <div className="text-sm">{reasonFor.completion_reason}</div>
-              </div>
-            )}
           </div>
         </Modal>
       )}

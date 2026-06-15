@@ -77,8 +77,9 @@ class Session:
         self.process_lock = threading.Lock()
         self.speak_lock = threading.Lock()
 
-SESSIONS = {}                       # bot_id     -> Session
-ROUTING  = {}                       # routing_key -> Session  (webhook path routing, concurrent-safe)
+SESSIONS   = {}   # bot_id      -> Session  (cleared when session ends)
+ROUTING    = {}   # routing_key -> Session  (cleared when session ends)
+COMPLETED  = {}   # routing_key -> session_id  (kept after end so recording.done can find it)
 _registry_lock = threading.Lock()
 
 def register(sess: Session):
@@ -256,6 +257,9 @@ def end_session(sess: Session, closing_text: str):
         threading.Thread(target=evaluator.evaluate_session,
                          args=(sid, sess.completion_status), daemon=True).start()
         threading.Thread(target=fetch_and_save_recording, args=(sess.bot_id, sid), daemon=True).start()
+    # keep routing_key → session_id so recording.done (fires minutes later) can still find it
+    if sess.routing_key and sid:
+        COMPLETED[sess.routing_key] = sid
     # unregister so the bot_id/routing_key can't be reused/contaminated
     with _registry_lock:
         SESSIONS.pop(sess.bot_id, None)
@@ -602,7 +606,7 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
                 "mode": "prioritize_low_latency", "language_code": "en"}}},
             "realtime_endpoints": [{"type": "webhook",
                 "url": f"{NGROK_URL}/webhook/transcription/{routing_key}",
-                "events": ["transcript.data", "transcript.partial_data"]}]
+                "events": ["transcript.data", "transcript.partial_data", "recording.done"]}]
         },
         "automatic_leave": {"waiting_room_timeout": 600,
                             "in_call_not_recording_timeout": 3600,
@@ -734,6 +738,26 @@ async def handle_transcription(request: Request, background_tasks: BackgroundTas
             if sess.session_id:
                 threading.Thread(target=fetch_and_save_recording,
                                  args=(bot_id, sess.session_id), daemon=True).start()
+        return {"status": "ok"}
+
+    if event == "recording.done":
+        # Recall has finished processing the recording — get the URL immediately instead of polling
+        sid = (sess.session_id if sess else None) or COMPLETED.get(routing_key)
+        bid = sess.bot_id if sess else bot_id
+        if sid and bid:
+            try:
+                rec_resp = requests.get(f"{RECALL_BASE}/bot/{bid}/", headers=recall_headers())
+                if rec_resp.status_code == 200:
+                    for rec in rec_resp.json().get("recordings", []):
+                        am  = (rec.get("media_shortcuts") or {}).get("audio_mixed") or {}
+                        url = (am.get("data") or {}).get("download_url")
+                        if url:
+                            db.save_recording_url(sid, url)
+                            print(f"🎥 [webhook] recording.done → URL saved for session {sid[:8]}")
+                            COMPLETED.pop(routing_key, None)
+                            break
+            except Exception as e:
+                print(f"❌ recording.done handler: {e}")
         return {"status": "ok"}
 
     if not sess or not text or speaker == BOT_NAME or sess.interview_over:

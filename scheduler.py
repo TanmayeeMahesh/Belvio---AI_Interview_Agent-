@@ -1,46 +1,37 @@
 """
 scheduler.py — Candidate invitation + (optional) meeting creation.
 
-Two independent pieces:
-  1. send_invite()        — emails the meeting link to the candidate via Gmail SMTP. NEEDS NOTHING
-                            from Microsoft. Works in every scheduling path. READY NOW.
-  2. create_google_meet() — creates a Google Calendar event WITH a Meet link via the Google
-                            Calendar API. Sidesteps the Microsoft admin-consent wall. GATED on
-                            Google OAuth setup (credentials.json + first-run browser consent).
+Email priority:
+  1. SendGrid HTTP API  (SENDGRID_API_KEY)  — free 100/day, works with a Gmail sender, no domain needed
+  2. Gmail SMTP         (GMAIL_ADDRESS + GMAIL_APP_PASSWORD) — works locally, blocked in cloud/HF Spaces
 
-Action A (create the link) is the only part that's ever blocked. Action B (email it) never is.
+SendGrid setup (5 min, free, no domain required):
+  1. Sign up at https://sendgrid.com  (free plan)
+  2. Settings → Sender Authentication → Single Sender Verification → Create a Sender
+     • Fill in your Gmail address as "From Email Address" → save → click the verification link in your Gmail
+  3. Settings → API Keys → Create API Key (Restricted: Mail Send only) → copy key
+  4. Add to .env / HF Spaces secrets:
+       SENDGRID_API_KEY=SG.xxxx...
+       SENDGRID_FROM_EMAIL=yourname@gmail.com   ← must match the address you verified above
 """
-import os, smtplib, ssl
+import os, smtplib, ssl, requests as _http
 from email.message import EmailMessage
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── Gmail SMTP config (.env) ─────────────────────────────
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS")        # e.g. aiinterviewbot@gmail.com
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")   # 16-char App Password, NOT your login password
+SENDGRID_API_KEY    = os.getenv("SENDGRID_API_KEY")
+SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL", "")
+
+GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
 
-# ─── 1. EMAIL INVITE (ready now, no Microsoft/Google needed) ──────────────
-def send_invite(to_email: str, candidate_name: str, meeting_url: str,
-                role: str = None, when: str = None) -> bool:
-    """
-    Email the interview invite + meeting link to the candidate.
-    Works regardless of how the meeting link was created (Teams by hand, Meet by API, etc).
-    Returns True on success, False on failure (fail-safe — never crashes the caller).
-    """
-    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-        print("❌ send_invite: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env")
-        return False
-    if not to_email:
-        print("❌ send_invite: no candidate email (resume parsing may have failed)")
-        return False
-
-    name = candidate_name or "Candidate"
+def _build_body(candidate_name, role, meeting_url, when):
+    name      = candidate_name or "Candidate"
     role_line = f" for the {role} position" if role else ""
     when_line = f"\n\nScheduled time: {when}" if when else ""
-
-    body = (
+    return (
         f"Hello {name},\n\n"
         f"You're invited to an AI-conducted technical interview{role_line}. "
         f"The session is conducted by an AI interviewer and will be recorded (audio and video) "
@@ -51,8 +42,56 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
         f"Best regards,\nRecruitment Team"
     )
 
+
+def send_invite(to_email: str, candidate_name: str, meeting_url: str,
+                role: str = None, when: str = None) -> bool:
+    """
+    Email the interview invite to the candidate.
+    Tries SendGrid HTTP API first, falls back to Gmail SMTP.
+    Returns True on success, False on failure.
+    """
+    if not to_email:
+        print("❌ send_invite: no candidate email provided")
+        return False
+
+    role_line = f" for the {role} position" if role else ""
+    subject   = f"Your Interview Invitation{role_line}"
+    body      = _build_body(candidate_name, role, meeting_url, when)
+
+    # ── Method 1: SendGrid HTTP API (works in cloud, no domain needed) ──
+    if SENDGRID_API_KEY:
+        if not SENDGRID_FROM_EMAIL:
+            print("⚠️  SENDGRID_FROM_EMAIL not set in .env — add the Gmail you verified in SendGrid")
+        else:
+            try:
+                resp = _http.post(
+                    "https://api.sendgrid.com/v3/mail/send",
+                    headers={
+                        "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "personalizations": [{"to": [{"email": to_email}]}],
+                        "from": {"email": SENDGRID_FROM_EMAIL},
+                        "subject": subject,
+                        "content": [{"type": "text/plain", "value": body}],
+                    },
+                    timeout=15,
+                )
+                if resp.status_code == 202:   # SendGrid returns 202 Accepted on success
+                    print(f"📧 Invite sent via SendGrid to {to_email}")
+                    return True
+                print(f"⚠️  SendGrid returned {resp.status_code}: {resp.text[:200]}")
+            except Exception as e:
+                print(f"⚠️  SendGrid error: {e}")
+
+    # ── Method 2: Gmail SMTP (works locally, blocked on HF Spaces) ──────
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        print("❌ send_invite: no email service configured — set SENDGRID_API_KEY or GMAIL creds in .env")
+        return False
+
     msg = EmailMessage()
-    msg["Subject"] = f"Your Interview Invitation{role_line}"
+    msg["Subject"] = subject
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = to_email
     msg.set_content(body)
@@ -66,26 +105,20 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
         except (OSError, smtplib.SMTPException) as e465:
             print(f"⚠️  SMTP port 465 failed ({e465}), trying STARTTLS port 587…")
             with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                server.ehlo()
-                server.starttls(context=ctx)
-                server.ehlo()
+                server.ehlo(); server.starttls(context=ctx); server.ehlo()
                 server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
                 server.send_message(msg)
-        print(f"📧 Invite sent to {to_email}")
+        print(f"📧 Invite sent via Gmail SMTP to {to_email}")
         return True
     except Exception as e:
         print(f"❌ send_invite failed: {e}")
         return False
 
 
-# ─── 2. GOOGLE MEET CREATION (gated on OAuth setup) ───────────────────────
-# Setup required before this runs:
-#   pip install google-auth google-auth-oauthlib google-api-python-client
-#   1. Google Cloud Console → new project → enable "Google Calendar API"
-#   2. Create OAuth client ID (Desktop app) → download as credentials.json (place beside this file)
-#   3. First run opens a browser to authorize; token is cached as token.json after that
-# No org-admin consent needed (unlike Microsoft Teams) — ordinary Google account works.
-
+# ─── GOOGLE MEET CREATION (gated on OAuth setup) ────────────────────────
+# Google Calendar API supports full read/write — create, update, delete events.
+# Setup: pip install google-auth google-auth-oauthlib google-api-python-client
+#        Then follow the OAuth flow (credentials.json from Google Cloud Console).
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 def create_google_meet(subject: str, start_iso: str, end_iso: str,
@@ -100,8 +133,7 @@ def create_google_meet(subject: str, start_iso: str, end_iso: str,
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
     except ImportError:
-        print("❌ create_google_meet: run "
-              "pip install google-auth google-auth-oauthlib google-api-python-client")
+        print("❌ create_google_meet: run pip install google-auth google-auth-oauthlib google-api-python-client")
         return None
 
     creds = None
@@ -113,10 +145,10 @@ def create_google_meet(subject: str, start_iso: str, end_iso: str,
                 creds.refresh(Request())
             else:
                 if not os.path.exists("credentials.json"):
-                    print("❌ create_google_meet: credentials.json missing (see setup notes)")
+                    print("❌ create_google_meet: credentials.json missing")
                     return None
                 flow = InstalledAppFlow.from_client_secrets_file("credentials.json", GOOGLE_SCOPES)
-                creds = flow.run_local_server(port=0)   # opens browser once
+                creds = flow.run_local_server(port=0)
             with open("token.json", "w") as f:
                 f.write(creds.to_json())
         except Exception as e:
