@@ -583,9 +583,39 @@ def scheduler_worker():
             print(f"❌ scheduler_worker loop: {e}")
         time.sleep(SCHEDULER_POLL_SEC)
 
+def stuck_session_cleaner():
+    """Every 10 min: find sessions stuck in_progress for >2 hours and close them."""
+    time.sleep(300)  # wait 5 min after startup before first check
+    while True:
+        try:
+            for row in db.list_stuck_sessions(older_than_minutes=120):
+                sid = row["id"]
+                stuck_bot_id = row.get("bot_id", "")
+                # Verify the bot is actually gone before closing
+                bot_gone = True
+                if stuck_bot_id:
+                    try:
+                        r = requests.get(f"{RECALL_BASE}/bot/{stuck_bot_id}/", headers=recall_headers())
+                        if r.status_code == 200:
+                            sc = r.json().get("status_changes", [])
+                            last = sc[-1].get("code", "") if sc else ""
+                            bot_gone = last in ("done", "fatal", "call_ended", "error") or not last
+                        else:
+                            bot_gone = True  # can't reach bot, assume gone
+                    except Exception:
+                        bot_gone = True
+                if bot_gone:
+                    db.close_session(sid, "stopped", row.get("questions_reached") or 0)
+                    threading.Thread(target=evaluator.evaluate_session, args=(sid, "stopped"), daemon=True).start()
+                    print(f"🔧 Stuck session cleaner: closed {sid[:8]} (bot {stuck_bot_id[:8] if stuck_bot_id else '?'})")
+        except Exception as e:
+            print(f"❌ stuck_session_cleaner: {e}")
+        time.sleep(600)  # check every 10 min
+
 @app.on_event("startup")
 def _start_scheduler():
     threading.Thread(target=scheduler_worker, daemon=True).start()
+    threading.Thread(target=stuck_session_cleaner, daemon=True).start()
 
 
 # ─── DEPLOY ───────────────────────────────────────────────
@@ -606,7 +636,7 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
                 "mode": "prioritize_low_latency", "language_code": "en"}}},
             "realtime_endpoints": [{"type": "webhook",
                 "url": f"{NGROK_URL}/webhook/transcription/{routing_key}",
-                "events": ["transcript.data", "transcript.partial_data", "recording.done"]}]
+                "events": ["transcript.data", "transcript.partial_data"]}]
         },
         "automatic_leave": {"waiting_room_timeout": 600,
                             "in_call_not_recording_timeout": 3600,
@@ -732,12 +762,30 @@ async def handle_transcription(request: Request, background_tasks: BackgroundTas
         print(f"🔍 [{label}] {event} | speaker={speaker!r} | text={text[:60]!r}")
 
     if event in ("bot.done", "call.ended"):
-        if sess and sess.transcript and not sess.interview_over:
-            save_transcript(sess)
-            db.close_session(sess.session_id, sess.completion_status, sess.question_index + 1)
-            if sess.session_id:
-                threading.Thread(target=fetch_and_save_recording,
-                                 args=(bot_id, sess.session_id), daemon=True).start()
+        if sess and not sess.interview_over:
+            # Bot left externally (host ended call, network drop, etc.) before end_session() ran
+            sess.interview_over = True
+            if sess.transcript:
+                save_transcript(sess)
+            sid = sess.session_id
+            db.close_session(sid, sess.completion_status, sess.question_index + 1)
+            if sid:
+                if sess.routing_key:
+                    COMPLETED[sess.routing_key] = sid
+                threading.Thread(target=fetch_and_save_recording, args=(bot_id, sid), daemon=True).start()
+                threading.Thread(target=evaluator.evaluate_session, args=(sid, sess.completion_status), daemon=True).start()
+            with _registry_lock:
+                SESSIONS.pop(bot_id, None)
+                if sess.routing_key:
+                    ROUTING.pop(sess.routing_key, None)
+        elif not sess and bot_id:
+            # Session not in memory (server restarted, routing miss) — close via DB if still open
+            sid = db.get_session_id_by_bot_id(bot_id)
+            if sid:
+                db.close_session(sid, "stopped", 0)
+                threading.Thread(target=evaluator.evaluate_session, args=(sid, "stopped"), daemon=True).start()
+                threading.Thread(target=fetch_and_save_recording, args=(bot_id, sid), daemon=True).start()
+                print(f"🔧 Closed orphaned session {sid[:8]} via bot.done webhook")
         return {"status": "ok"}
 
     if event == "recording.done":
