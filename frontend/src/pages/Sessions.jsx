@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import API from '../api'
 
-const STATUS_ORDER = ['all', 'scheduled', 'in_progress', 'completed', 'incomplete', 'no_show', 'capped', 'stopped', 'error']
+const STATUS_OPTIONS = ['all', 'scheduled', 'in_progress', 'completed', 'incomplete', 'no_show', 'capped']
+const RESULT_OPTIONS = ['all', 'Strongly Recommended', 'Recommended', 'Needs Further Review', 'Not Recommended']
 
 function badgeClass(status) {
   if (!status) return 'badge'
-  const s = status.split('_')[0]  // "incomplete_no_response" → "incomplete"
+  const s = status.split('_')[0]
   const map = { scheduled: 'badge-scheduled', in: 'badge-in_progress', completed: 'badge-completed',
                 incomplete: 'badge-incomplete', no: 'badge-no_show', capped: 'badge-capped',
                 stopped: 'badge-stopped', error: 'badge-error' }
@@ -14,6 +15,24 @@ function badgeClass(status) {
 
 function StatusBadge({ status }) {
   return <span className={badgeClass(status)}>{status?.replace(/_/g, ' ') || '—'}</span>
+}
+
+function RecommendationBadge({ rec }) {
+  if (!rec) return null
+  const base = rec.replace(/ \(Incomplete Session\)$/, '')
+  const styles = {
+    'Strongly Recommended': { bg: '#ecfdf5', color: '#059669' },
+    'Recommended':          { bg: '#eff6ff', color: '#3b82f6' },
+    'Needs Further Review': { bg: '#fffbeb', color: '#d97706' },
+    'Not Recommended':      { bg: '#fef2f2', color: '#dc2626' },
+  }
+  const s = styles[base] || { bg: '#f3f4f6', color: '#6b7280' }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 999,
+                   fontWeight: 500, fontSize: 12, background: s.bg, color: s.color }}>
+      {base}
+    </span>
+  )
 }
 
 function Modal({ title, onClose, children }) {
@@ -69,6 +88,8 @@ export default function Sessions({ token, onViewReport }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [resultFilter, setResultFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [planFor, setPlanFor] = useState(null)
   const [reasonFor, setReasonFor] = useState(null)
@@ -86,11 +107,18 @@ export default function Sessions({ token, onViewReport }) {
     setLoading(false)
   }
 
+  const uniqueRoles = [...new Set(sessions.map(s => s.role).filter(Boolean))].sort()
+
   const filtered = sessions.filter(s => {
     if (statusFilter !== 'all' && !(s.status || '').startsWith(statusFilter)) return false
+    if (roleFilter !== 'all' && s.role !== roleFilter) return false
+    if (resultFilter !== 'all') {
+      const base = (s.recommendation || '').replace(/ \(Incomplete Session\)$/, '')
+      if (base !== resultFilter) return false
+    }
     if (search) {
       const q = search.toLowerCase()
-      return (s.candidate_name || '').toLowerCase().includes(q) || (s.role || '').toLowerCase().includes(q)
+      return (s.candidate_name || '').toLowerCase().includes(q)
     }
     return true
   })
@@ -108,13 +136,32 @@ export default function Sessions({ token, onViewReport }) {
       </div>
 
       {/* Filters */}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 200px' }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or role…" style={{ height: 34 }} />
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search candidate name…"
+            style={{ height: 34, flex: '2 1 180px' }}
+          />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            style={{ height: 34, flex: '1 1 140px', width: 'auto' }}>
+            {STATUS_OPTIONS.map(s => (
+              <option key={s} value={s}>{s === 'all' ? 'All statuses' : s.replace(/_/g, ' ')}</option>
+            ))}
+          </select>
+          <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
+            style={{ height: 34, flex: '1 1 150px', width: 'auto' }}>
+            <option value="all">All roles</option>
+            {uniqueRoles.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <select value={resultFilter} onChange={e => setResultFilter(e.target.value)}
+            style={{ height: 34, flex: '1 1 180px', width: 'auto' }}>
+            {RESULT_OPTIONS.map(r => (
+              <option key={r} value={r}>{r === 'all' ? 'All results' : r}</option>
+            ))}
+          </select>
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ width: 'auto', height: 34 }}>
-          {STATUS_ORDER.map(s => <option key={s} value={s}>{s === 'all' ? 'All statuses' : s.replace(/_/g, ' ')}</option>)}
-        </select>
       </div>
 
       {error && <div className="text-danger text-sm" style={{ marginBottom: 12 }}>{error}</div>}
@@ -133,6 +180,7 @@ export default function Sessions({ token, onViewReport }) {
                 <th>Candidate</th>
                 <th>Role</th>
                 <th>Status</th>
+                <th>Result</th>
                 <th>Scheduled At</th>
                 <th></th>
               </tr>
@@ -146,6 +194,13 @@ export default function Sessions({ token, onViewReport }) {
                   </td>
                   <td className="text-secondary">{s.role || '—'}</td>
                   <td><StatusBadge status={s.status} /></td>
+                  <td>
+                    {s.recommendation
+                      ? <RecommendationBadge rec={s.recommendation} />
+                      : s.overall_score != null
+                        ? <span className="font-semibold text-sm">{s.overall_score}/10</span>
+                        : <span className="text-secondary">—</span>}
+                  </td>
                   <td className="text-secondary text-sm">{formatDate(s.scheduled_at || s.created_at)}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>

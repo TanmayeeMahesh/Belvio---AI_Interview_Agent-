@@ -58,6 +58,11 @@ function NarrativeSection({ title, text }) {
   )
 }
 
+function fmtDate(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' })
+}
+
 export default function Reports({ token, defaultSessionId }) {
   const [sessions, setSessions] = useState([])
   const [selectedId, setSelectedId] = useState(defaultSessionId || '')
@@ -65,6 +70,7 @@ export default function Reports({ token, defaultSessionId }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showTranscript, setShowTranscript] = useState(false)
+  const [sortBy, setSortBy] = useState('date-desc')
 
   useEffect(() => {
     API.get('/api/hr/sessions', { headers: { authorization: `Bearer ${token}` } })
@@ -98,6 +104,14 @@ export default function Reports({ token, defaultSessionId }) {
   const candidateName = sess.candidate_name || sessions.find(s => s.id === selectedId)?.candidate_name || '—'
   const candidateRole = sess.role || sessions.find(s => s.id === selectedId)?.role || '—'
 
+  const sortedSessions = [...sessions].sort((a, b) => {
+    if (sortBy === 'date-asc') return new Date(a.scheduled_at || a.created_at || 0) - new Date(b.scheduled_at || b.created_at || 0)
+    if (sortBy === 'role') return (a.role || '').localeCompare(b.role || '')
+    if (sortBy === 'score') return (b.overall_score ?? -1) - (a.overall_score ?? -1)
+    // default: date-desc
+    return new Date(b.scheduled_at || b.created_at || 0) - new Date(a.scheduled_at || a.created_at || 0)
+  })
+
   async function downloadPdf(id) {
     try {
       const res = await API.get(`/api/hr/report/${id}/pdf`, {
@@ -127,14 +141,20 @@ export default function Reports({ token, defaultSessionId }) {
         <div style={{ flex: 1 }}>
           <select value={selectedId} onChange={e => setSelectedId(e.target.value)}>
             <option value="">— Select a session —</option>
-            {sessions.map(s => (
+            {sortedSessions.map(s => (
               <option key={s.id} value={s.id}>
-                {s.candidate_name || 'Unknown'} · {s.role || '?'} · {s.status}
+                {s.candidate_name || 'Unknown'} · {s.role || '?'} · {fmtDate(s.scheduled_at || s.created_at)}
                 {s.overall_score != null ? ` · ${s.overall_score}/10` : ''}
               </option>
             ))}
           </select>
         </div>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ width: 'auto' }}>
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="role">By role</option>
+          <option value="score">By score</option>
+        </select>
         {selectedId && <button className="btn-ghost btn-sm" onClick={() => fetchSession(selectedId)}>↻</button>}
       </div>
 

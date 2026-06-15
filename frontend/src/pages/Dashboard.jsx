@@ -1,7 +1,10 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import API from '../api'
 
-const ROLES = ['Software Engineer', 'Frontend Developer', 'Business Analyst', 'Data Scientist', 'Product Manager', 'DevOps Engineer']
+const ROLE_SUGGESTIONS = [
+  'Software Engineer', 'Frontend Developer', 'Backend Developer', 'Full Stack Developer',
+  'Business Analyst', 'Data Scientist', 'Product Manager', 'DevOps Engineer', 'QA Engineer', 'Data Engineer'
+]
 
 function DropZone({ label, file, onChange, accept = '.pdf' }) {
   const ref = useRef()
@@ -59,7 +62,27 @@ function SkillChip({ text, variant = 'found' }) {
   )
 }
 
+function StatCard({ label, value, accent }) {
+  const colorMap = {
+    purple: { bg: '#f5f3ff', text: '#4f46e5', label: '#7c3aed' },
+    green:  { bg: '#ecfdf5', text: '#065f46', label: '#059669' },
+    blue:   { bg: '#eff6ff', text: '#1e40af', label: '#3b82f6' },
+    amber:  { bg: '#fffbeb', text: '#92400e', label: '#d97706' },
+    red:    { bg: '#fef2f2', text: '#991b1b', label: '#dc2626' },
+  }
+  const c = colorMap[accent] || colorMap.purple
+  return (
+    <div className="card" style={{ padding: '14px 16px', background: c.bg }}>
+      <div style={{ fontSize: 12, fontWeight: 500, color: c.label, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: c.text, lineHeight: 1 }}>
+        {value ?? '—'}
+      </div>
+    </div>
+  )
+}
+
 export default function Dashboard({ token }) {
+  const [stats, setStats] = useState(null)
   const [resume, setResume] = useState(null)
   const [jd, setJd] = useState(null)
   const [role, setRole] = useState('Software Engineer')
@@ -76,6 +99,19 @@ export default function Dashboard({ token }) {
   const [scheduled, setScheduled] = useState(null)
   const [scheduleError, setScheduleError] = useState('')
 
+  useEffect(() => {
+    if (!token) return
+    API.get('/api/hr/sessions', { headers: { authorization: `Bearer ${token}` } })
+      .then(r => {
+        const ss = Array.isArray(r.data) ? r.data : []
+        const completed  = ss.filter(s => s.status === 'completed').length
+        const scheduled  = ss.filter(s => s.status === 'scheduled').length
+        const inProgress = ss.filter(s => s.status === 'in_progress').length
+        setStats({ all: ss.length, completed, scheduled, inProgress, incomplete: ss.length - completed - scheduled - inProgress })
+      })
+      .catch(() => {})
+  }, [token])
+
   async function handleAnalyse() {
     if (!resume && !jd) { setAnalyseError('Upload at least one document.'); return }
     setAnalyseLoading(true); setAnalyseError(''); setAnalysis(null); setScheduled(null)
@@ -90,6 +126,7 @@ export default function Dashboard({ token }) {
       setAnalysis(data.analysis)
       setTempFiles(data.tempFiles)
       if (data.analysis.candidateEmail) setEmail(data.analysis.candidateEmail)
+      if (data.analysis.jobRole) setRole(data.analysis.jobRole)
     } catch (e) {
       const msg = e.response?.data?.detail
       setAnalyseError(typeof msg === 'string' ? msg : 'Analysis failed. Check server logs.')
@@ -122,6 +159,17 @@ export default function Dashboard({ token }) {
     <div className="page">
       <div className="page-title">Dashboard</div>
 
+      {/* Stat cards */}
+      {stats && (
+        <div className="grid-5" style={{ marginBottom: 20 }}>
+          <StatCard label="All"         value={stats.all}        accent="purple" />
+          <StatCard label="Completed"   value={stats.completed}  accent="green" />
+          <StatCard label="Scheduled"   value={stats.scheduled}  accent="blue" />
+          <StatCard label="In Progress" value={stats.inProgress} accent="amber" />
+          <StatCard label="Incomplete"  value={stats.incomplete} accent="red" />
+        </div>
+      )}
+
       {/* Upload + Analyse */}
       <div className="card" style={{ padding: 20, marginBottom: 20 }}>
         <div style={{ fontWeight: 600, marginBottom: 14 }}>New Interview</div>
@@ -132,10 +180,16 @@ export default function Dashboard({ token }) {
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <label>Role</label>
-            <select value={role} onChange={e => setRole(e.target.value)}>
-              {ROLES.map(r => <option key={r}>{r}</option>)}
-              <option value={role} style={{ display: ROLES.includes(role) ? 'none' : '' }}>{role}</option>
-            </select>
+            <input
+              type="text"
+              list="role-list"
+              value={role}
+              onChange={e => setRole(e.target.value)}
+              placeholder="e.g. Software Engineer"
+            />
+            <datalist id="role-list">
+              {ROLE_SUGGESTIONS.map(r => <option key={r} value={r} />)}
+            </datalist>
           </div>
           <button className="btn-primary" onClick={handleAnalyse} disabled={analyseLoading} style={{ height: 38, minWidth: 120 }}>
             {analyseLoading ? 'Analysing…' : 'Analyse'}
@@ -197,7 +251,10 @@ export default function Dashboard({ token }) {
           <div style={{ fontWeight: 600, marginBottom: 14 }}>Schedule Interview</div>
           <div className="grid-2" style={{ marginBottom: 14 }}>
             <div>
-              <label>Candidate Email</label>
+              <label>
+                Candidate Email
+                <span className="text-secondary" style={{ fontWeight: 400, marginLeft: 4 }}>(optional — needed to send invite)</span>
+              </label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="candidate@example.com" />
             </div>
             <div>
@@ -240,7 +297,7 @@ export default function Dashboard({ token }) {
             <div>
               <div className="text-xs text-secondary">Email invite</div>
               <div className={scheduled.email_sent ? 'text-success' : 'text-danger'}>
-                {scheduled.email_sent ? '✓ Sent' : '✗ Not sent'}
+                {scheduled.email_sent ? '✓ Sent' : email ? '✗ Not sent (check Gmail config)' : '— No email provided'}
               </div>
             </div>
           </div>
