@@ -94,11 +94,15 @@ def build_report_pdf(report: dict, transcript: list = None, out_dir: str = ".") 
     per_topic = report.get("per_topic", [])
     if per_topic:
         story.append(Paragraph("Per-Topic Detail", s["H"]))
+        cell = ParagraphStyle("Cell", parent=s["Normal"], fontSize=8, leading=11)
         rows = [["Topic", "Score", "Note"]]
         for tp in per_topic:
             ans = "" if tp.get("answered", True) else " (no answer)"
-            rows.append([f"{_esc(tp.get('topic'))}{ans}", f"{tp.get('topic_score','—')}",
-                         _esc(tp.get("note", ""))[:90]])
+            rows.append([
+                Paragraph(f"{_esc(tp.get('topic'))}{ans}", cell),   # wraps within column
+                f"{tp.get('topic_score','—')}",
+                Paragraph(_esc(tp.get("note", "")), cell),          # wraps — no more overflow
+            ])
         tt = Table(rows, colWidths=[45*mm, 20*mm, 85*mm])
         tt.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,0), GREY),

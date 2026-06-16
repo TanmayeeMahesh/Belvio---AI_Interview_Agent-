@@ -224,9 +224,12 @@ export default function Reports({ token, defaultSessionId }) {
     <div className="page">
       <div className="flex-between" style={{ marginBottom: 20 }}>
         <button className="btn-ghost btn-sm" onClick={goBack}>← Back to reports</button>
-        {fullData?.report && (
-          <button className="btn-primary btn-sm" onClick={() => downloadPdf(selectedId)}>⬇ Download PDF</button>
-        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-ghost btn-sm" onClick={() => fetchSession(selectedId)}>↻ Refresh</button>
+          {fullData?.report && (
+            <button className="btn-primary btn-sm" onClick={() => downloadPdf(selectedId)}>⬇ Download PDF</button>
+          )}
+        </div>
       </div>
 
       {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-secondary)' }}>Loading…</div>}
@@ -265,6 +268,24 @@ export default function Reports({ token, defaultSessionId }) {
               </div>
             )}
           </div>
+
+          {/* Recording */}
+          {sess.recording_url ? (
+            <div className="card" style={{ padding: 20 }}>
+              <div className="flex-between" style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600 }}>Interview Recording</div>
+                <a href={sess.recording_url} target="_blank" rel="noreferrer"
+                   className="btn-ghost btn-sm" style={{ textDecoration: 'none' }}>⬇ Download</a>
+              </div>
+              <audio controls preload="none" src={sess.recording_url} style={{ width: '100%' }}>
+                Your browser can’t play this audio — use the download link above.
+              </audio>
+            </div>
+          ) : (
+            <div className="card" style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+              Recording is still processing — it can take a few minutes after the interview ends. Use ↻ to refresh.
+            </div>
+          )}
 
           {/* Dimension scores */}
           <div>

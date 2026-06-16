@@ -124,7 +124,7 @@ def get_session_context(session_id: str) -> dict:
         return {}
     try:
         res = db.table("sessions").select(
-            "role, key_skills, missing_skills, analysis_summary, jd_match_score"
+            "role, detected_level, key_skills, missing_skills, analysis_summary, jd_match_score"
         ).eq("id", session_id).execute()
         return res.data[0] if res.data else {}
     except Exception as e:

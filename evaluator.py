@@ -49,35 +49,63 @@ def _group_by_topic(answers: list) -> dict:
     return topics
 
 
-def _score_topic(topic: str, block: dict, context: str = "") -> dict:
-    """Score ONE topic on the four dimensions with the 70B model."""
+def _calibration(level: str) -> str:
+    """Level-relative scoring baseline so a strong fresher isn't judged like a weak senior."""
+    lv = (level or "").strip().lower()
+    if any(k in lv for k in ("fresher", "junior", "entry", "graduate", "0-2")):
+        return ("Score against a 0-2 year (fresher) candidate. Reward solid fundamentals, clear "
+                "thinking, and learning aptitude. Do NOT expect production-scale, deep architecture, "
+                "or leadership — their absence is NOT a penalty at this level.")
+    if any(k in lv for k in ("experienced", "senior", "lead", "expert", "5+")):
+        return ("Score against a 5+ year (experienced) candidate. Expect depth, trade-offs, real-world "
+                "scale, and leadership. Correct fundamentals ALONE are average (5-6), not strong.")
+    return ("Score against a 2-5 year (intermediate) candidate. Expect hands-on implementation and "
+            "practical trade-off awareness. Solid practical answers are strong; deep architecture or "
+            "leadership is a bonus, not a requirement.")
+
+
+def _score_topic(topic: str, block: dict, context: str = "",
+                 level: str = "intermediate", key_concepts: list = None) -> dict:
+    """Score ONE topic on the four dimensions with the 70B model, anchored + level-calibrated."""
     live_hint = ", ".join(block["categories"]) or "none"
     ctx_line = f"\nJD/RESUME CONTEXT: {context}" if context else ""
-    prompt = f"""You are a STRICT senior technical interviewer producing a FINAL, auditable score for
-one interview topic. Input is speech-to-text (no punctuation, words may be doubled or dropped, "emb"
-may mean "MBA") — judge MEANING charitably, never penalize transcription noise.
+    concepts = ", ".join(key_concepts or []) or "(none specified)"
+    lvl = level or "intermediate"
+    prompt = f"""You are scoring ONE interview topic for a {lvl} candidate, producing a FINAL, auditable score.
+Input is speech-to-text (no punctuation, words may be doubled or dropped, "emb" may mean "MBA") —
+judge MEANING charitably, never penalize transcription noise.
 
-Be discriminating. Most answers are NOT a 9-10. Reserve high scores for genuine depth and correctness.
-Confident jargon with no real explanation scores LOW on accuracy and depth even if it sounds fluent.
+LEVEL CALIBRATION ({lvl}): {_calibration(lvl)}
 {ctx_line}
 TOPIC: {topic}
 QUESTION: {block['question']}
+EXPECTED KEY CONCEPTS (the answer key): {concepts}
 CANDIDATE ANSWER: {block['answer']}
 FOLLOW-UP ASKED: {block['followup_q'] or '(none)'}
 FOLLOW-UP ANSWER: {block['followup_a'] or '(none)'}
 LIVE FIRST-PASS SIGNAL (hint only, may be wrong): {live_hint}
 
-Score EACH dimension 1-10:
-  technical_accuracy — correct, on-topic, no errors (1 = wrong/absent, 10 = fully correct)
-  depth — specifics, examples, trade-offs (1 = vague one-liner, 10 = concrete and thorough)
-  clarity_communication — structured, coherent, and well-communicated: is the answer easy to follow,
-                          logically organized, and clearly expressed? (1 = incoherent/rambling,
-                          10 = crystal clear and well-articulated)
-  problem_solving — reasoning/approach visible (1 = none, 10 = clear methodology)
+SCORING ANCHORS — match observed behavior to a band, do NOT default to low:
+  9-10: correct + specific examples + trade-offs; DEMONSTRATES understanding, not just naming
+  7-8 : correct + some specifics; solid working understanding for this level, minor gaps
+  5-6 : partially correct OR correct but shallow (names concepts, light on how/why)
+  3-4 : major errors, mostly vague, or buzzwords only
+  1-2 : wrong, off-topic, or no real content
 
-Also set "answered": false ONLY if the candidate gave essentially NO content (e.g. just "yes",
-"I don't know", silence, or repeated a previous answer without addressing THIS topic). If they made
-a genuine attempt with real content — even if weak — set "answered": true.
+Score EACH dimension 1-10, anchored to the bands above and the {lvl} baseline:
+  technical_accuracy — coverage of the EXPECTED KEY CONCEPTS + correctness. Driven by how many of those
+                       concepts they genuinely DEMONSTRATED (not merely named): 0 demonstrated = 1-2,
+                       all demonstrated with real explanation = 9-10.
+  depth — specifics, examples, trade-offs vs a vague one-liner
+  clarity_communication — structured, coherent, easy to follow
+  problem_solving — visible reasoning / methodology
+
+A strong answer FOR THIS LEVEL should land 7-8, not 5. Use the FULL range. Reserve 9-10 for genuinely
+excellent and 1-3 for genuinely poor — do not cluster everyone in the middle or bottom.
+
+Set "answered": false ONLY if the candidate gave essentially NO content (just "yes", "I don't know",
+silence, or repeated a prior answer without addressing THIS topic). A genuine attempt with real
+content — even if weak — is "answered": true.
 
 Reply ONLY valid JSON, no markdown:
 {{"technical_accuracy":<1-10>,"depth":<1-10>,"clarity_communication":<1-10>,"problem_solving":<1-10>,
@@ -112,16 +140,18 @@ def _recommendation(composite: float) -> str:
 
 
 def _summarize(topic_scores: list, composite: float, recommendation: str,
-               candidate: dict, status: str, context: str = "") -> dict:
+               candidate: dict, status: str, context: str = "", level: str = "intermediate") -> dict:
     """One more LLM call to write strengths, gaps, and a justification citing the scores."""
     breakdown = "\n".join(f"- {t['topic']}: {t['topic_score']}/10 ({t.get('note','')})"
                           for t in topic_scores)
     incomplete = status != "completed"
     ctx_block = f"\nJD/RESUME CONTEXT:\n{context}\n" if context else ""
     prompt = f"""You are writing the narrative section of a hiring evaluation report. Be specific and
-reference the per-topic results. Do not invent facts not in the breakdown.
+reference the per-topic results. Do not invent facts not in the breakdown. Judge strengths and gaps
+against a {level} candidate's expected baseline — do not fault a fresher for lacking senior-level
+experience, and do not over-credit a senior for only covering fundamentals.
 
-CANDIDATE: {candidate.get('name') or 'Unknown'}  ROLE: {candidate.get('role') or 'Unspecified'}
+CANDIDATE: {candidate.get('name') or 'Unknown'}  ROLE: {candidate.get('role') or 'Unspecified'}  LEVEL: {level}
 OVERALL COMPOSITE: {composite}/10
 RECOMMENDATION: {recommendation}
 SESSION STATUS: {status}{"  (INTERVIEW INCOMPLETE — note this)" if incomplete else ""}
@@ -172,9 +202,21 @@ def evaluate_session(session_id: str, status: str = "completed") -> dict:
                    f"Missing: {missing_str or 'N/A'} | "
                    f"Summary: {(ctx.get('analysis_summary') or '')[:200]}")
 
+    # candidate level + the pre-generated key_concepts act as the level-calibrated answer key
+    level = (ctx.get("detected_level") if ctx else None) or "intermediate"
+    concept_map = {}
+    for q in db.get_questions(session_id):
+        tp = q.get("topic") or "General"
+        kc = q.get("key_concepts") if isinstance(q.get("key_concepts"), list) else []
+        concept_map.setdefault(tp, [])
+        for c in kc:
+            if c not in concept_map[tp]:
+                concept_map[tp].append(c)
+
     topics = _group_by_topic(answers)
     # only score topics that actually got an answer row
-    all_scores = [_score_topic(t, b, context) for t, b in topics.items() if b["answer"]]
+    all_scores = [_score_topic(t, b, context, level, concept_map.get(t))
+                  for t, b in topics.items() if b["answer"]]
     if not all_scores:
         print("⚠️ no answered topics")
         return {}
@@ -189,7 +231,7 @@ def evaluate_session(session_id: str, status: str = "completed") -> dict:
     composite = round(sum(t["topic_score"] for t in scored) / len(scored), 2)
     recommendation = _recommendation(composite)
 
-    narrative = _summarize(scored, composite, recommendation, candidate, status, context)
+    narrative = _summarize(scored, composite, recommendation, candidate, status, context, level)
 
     # Dimension averages across ANSWERED topics (headline metrics)
     def davg(dim): return round(sum(t[dim] for t in scored) / len(scored), 2)

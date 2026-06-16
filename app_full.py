@@ -160,8 +160,25 @@ def get_bot_status(bot_id):
         return sc[-1].get("code", "unknown") if sc else "unknown"
     return "error"
 
+def _find_download_url(obj):
+    """Recursively search any nested dict/list for a non-empty 'download_url'. Recall nests it
+    under media_shortcuts.<kind>.data.download_url, but the <kind> key varies by recording config."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "download_url" and isinstance(v, str) and v:
+                return v
+            found = _find_download_url(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_download_url(item)
+            if found:
+                return found
+    return None
+
 def fetch_and_save_recording(bot_id, session_id):
-    """Retrieve the MP4 download URL after the call and save it (US-AG-06). S3 URL is ~7-day temp."""
+    """Retrieve the recording download URL after the call and save it (US-AG-06). S3 URL is temporary."""
     if not session_id:
         return
     time.sleep(15)
@@ -170,21 +187,22 @@ def fetch_and_save_recording(bot_id, session_id):
             r = requests.get(f"{RECALL_BASE}/bot/{bot_id}/", headers=recall_headers())
             if r.status_code == 200:
                 data = r.json()
-                for rec in data.get("recordings", []):
-                    am = (rec.get("media_shortcuts", {}) or {}).get("audio_mixed", {}) or {}
-                    url = (am.get("data", {}) or {}).get("download_url")
+                recs = data.get("recordings", [])
+                # search the whole recording object — the media_shortcuts key name varies by config
+                for rec in recs:
+                    url = _find_download_url(rec)
                     if url:
                         print(f"🎥 recording URL retrieved (attempt {attempt+1})")
                         db.save_recording_url(session_id, url)
                         return
-                recs = data.get("recordings", [])
                 if not recs:
                     print(f"   🎥 no recordings array yet (attempt {attempt+1}/20)...")
                 else:
                     status_code = (recs[0].get("status") or {}).get("code", "?")
                     print(f"   🎥 {len(recs)} rec(s), status={status_code!r}, URL not ready (attempt {attempt+1}/20)...")
                     if attempt == 0:
-                        print(f"   🎥 rec keys: {list(recs[0].keys())}")
+                        # one-time dump so we can see the real media_shortcuts shape if URL never appears
+                        print(f"   🎥 media_shortcuts = {json.dumps(recs[0].get('media_shortcuts', {}))[:800]}")
             else:
                 print(f"   🎥 API {r.status_code} (attempt {attempt+1}/20)...")
         except Exception as e:
@@ -392,6 +410,28 @@ Reference a SPECIFIC detail they actually said. Reply with ONLY the spoken follo
     except Exception as e:
         print(f"❌ followup_line(): {e}"); return "Could you go a bit deeper on that?"
 
+def intro_followup_line(answer) -> str:
+    """Purposeful follow-up for the opening 'tell me about yourself' question — always steers the
+    candidate to describe a concrete project, instead of a random gate-based follow-up."""
+    prompt = f"""{IO_CONTEXT}
+
+This is a candidate's opening background answer at the start of an interview:
+"{answer}"
+
+Ask ONE warm follow-up that invites them to pick ONE project or piece of work they mentioned and
+describe it concretely — what it was, their specific role, and the technologies or approach they used.
+If they did not clearly mention any project, ask them to walk you through a recent project they are
+proud of. Reference something specific they said. Reply with ONLY the spoken follow-up question."""
+    try:
+        resp = groq_client.chat.completions.create(
+            model=REPLY_MODEL, messages=[{"role": "user", "content": prompt}],
+            max_tokens=90, temperature=0.6)
+        return (resp.choices[0].message.content.strip().strip('"')
+                or "Could you tell me about one project you worked on and what your role was?")
+    except Exception as e:
+        print(f"❌ intro_followup_line(): {e}")
+        return "Could you tell me about one project you worked on and what your role was?"
+
 def rephrase_question(question, key_concepts) -> str:
     prompt = f"""{IO_CONTEXT}
 The candidate did not understand this question. Rephrase it more simply and concretely with a tiny
@@ -534,6 +574,18 @@ def process_answer(sess: Session, candidate_text: str):
 
     log_to_transcript(sess, "Candidate", candidate_text, category=category,
                       topic=item["topic"], q_id=str(q_num), role="answer")
+
+    # Intro/background question → always one purposeful project-focused follow-up (not random)
+    is_intro = sess.question_index == 0 or (item.get("topic") or "").strip().lower() == "introduction"
+    if is_intro and sess.followup_count < FOLLOWUPS_PER_Q:
+        sess.followup_count += 1
+        sess.awaiting_followup = True
+        fu = intro_followup_line(candidate_text)
+        sess.last_asked = fu
+        print(f"🔄 [{sess.bot_id[:8]}] Intro project follow-up {q_num}.1")
+        log_to_transcript(sess, BOT_NAME, fu, topic=item["topic"], q_id=f"{q_num}.1", role="followup_question")
+        speak(sess, fu)
+        return
 
     if category != "strong" and sess.followup_count < FOLLOWUPS_PER_Q:
         sess.followup_count += 1
