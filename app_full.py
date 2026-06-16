@@ -1,4 +1,14 @@
-import base64, io, json, requests, time, threading, uuid
+import base64, io, json, requests, time, threading, uuid, sys
+
+# Windows consoles default to cp1252 and CRASH on emoji in print() with UnicodeEncodeError.
+# Force UTF-8 so the emoji log lines never break send_invite() or any other code path.
+# (Linux / HF Spaces already use UTF-8 — this is a harmless no-op there.)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse

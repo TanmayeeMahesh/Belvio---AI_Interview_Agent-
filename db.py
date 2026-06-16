@@ -4,7 +4,7 @@ All functions fail SAFE: if Supabase is unreachable, they log and return None so
 interview is never interrupted by a DB problem. The local JSON transcript remains the backup.
 """
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -385,6 +385,35 @@ def get_session_full(session_id) -> dict:
     except Exception as e:
         print(f"❌ get_session_full() failed: {e}")
         return {}
+
+
+def get_session_id_by_bot_id(bot_id: str) -> str | None:
+    """Return the session_id of an in_progress session for this bot (used when Session is gone from memory)."""
+    db = _db()
+    if not db or not bot_id:
+        return None
+    try:
+        res = (db.table("sessions").select("id")
+               .eq("bot_id", bot_id).eq("status", "in_progress").execute())
+        return res.data[0]["id"] if res.data else None
+    except Exception as e:
+        print(f"❌ get_session_id_by_bot_id() failed: {e}")
+        return None
+
+
+def list_stuck_sessions(older_than_minutes: int = 120) -> list:
+    """Sessions still in_progress for longer than the given threshold — likely orphaned."""
+    db = _db()
+    if not db:
+        return []
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+        res = (db.table("sessions").select("id, bot_id, questions_reached")
+               .eq("status", "in_progress").lt("started_at", cutoff).execute())
+        return res.data or []
+    except Exception as e:
+        print(f"❌ list_stuck_sessions() failed: {e}")
+        return []
 
 
 def get_report(session_id) -> dict:

@@ -233,11 +233,11 @@ export default function Sessions({ token, onViewReport }) {
 
       {/* Reason modal */}
       {reasonFor && (
-        <Modal title="Session Reason" onClose={() => setReasonFor(null)}>
-          <div className="gap-12" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Modal title="Session Details" onClose={() => setReasonFor(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div className="text-xs text-secondary">Candidate</div>
-              <div>{reasonFor.candidate_name || '—'}</div>
+              <div className="font-semibold">{reasonFor.candidate_name || '—'}</div>
             </div>
             <div>
               <div className="text-xs text-secondary">Status</div>
@@ -245,8 +245,35 @@ export default function Sessions({ token, onViewReport }) {
             </div>
             <div>
               <div className="text-xs text-secondary">Questions reached</div>
-              <div>{reasonFor.questions_reached ?? '—'}</div>
+              <div>{reasonFor.questions_reached != null
+                ? reasonFor.questions_reached
+                : reasonFor.status === 'in_progress'
+                  ? <span className="text-secondary text-sm">Session interrupted — bot left before the interview could close properly</span>
+                  : <span className="text-secondary text-sm">Not recorded</span>}
+              </div>
             </div>
+            {reasonFor.status?.startsWith('incomplete') && (
+              <div>
+                <div className="text-xs text-secondary">Reason</div>
+                <div className="text-sm">
+                  {reasonFor.status === 'incomplete_no_response' && 'Candidate stopped responding during the interview'}
+                  {reasonFor.status === 'incomplete_silence' && 'Ended due to prolonged silence'}
+                  {!['incomplete_no_response','incomplete_silence'].includes(reasonFor.status) && 'Interview ended before all questions were completed'}
+                </div>
+              </div>
+            )}
+            {reasonFor.status === 'no_show' && (
+              <div>
+                <div className="text-xs text-secondary">Reason</div>
+                <div className="text-sm">Candidate did not respond to the consent prompt within 5 minutes</div>
+              </div>
+            )}
+            {reasonFor.status === 'capped' && (
+              <div>
+                <div className="text-xs text-secondary">Reason</div>
+                <div className="text-sm">45-minute interview cap reached</div>
+              </div>
+            )}
           </div>
         </Modal>
       )}
