@@ -1,6 +1,10 @@
 # Secrets — never push these
 .env
 frontend/.env
+steps.txt
+*.local
+*credentials*.json
+token.json
 
 # Python
 .venv/
