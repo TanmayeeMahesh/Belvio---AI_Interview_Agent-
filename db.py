@@ -20,9 +20,9 @@ def _db():
         try:
             from supabase import create_client
             _client = create_client(_SUPABASE_URL, _SUPABASE_KEY)
-            print("🗄️  Supabase client ready")
+            print("[DB]  Supabase client ready")
         except Exception as e:
-            print(f"❌ Supabase init failed (interview will still run): {e}")
+            print(f"[ERROR] Supabase init failed (interview will still run): {e}")
             _client = False          # mark as failed so we don't retry every call
     return _client or None
 
@@ -52,10 +52,10 @@ def create_session(bot_id: str, total_questions: int,
             "started_at": _now(),
         }).execute()
         sid = sess.data[0]["id"]
-        print(f"🗄️  session created → {sid} ({status})")
+        print(f"[DB]  session created → {sid} ({status})")
         return sid
     except Exception as e:
-        print(f"❌ create_session() failed (continuing without DB): {e}")
+        print(f"[ERROR] create_session() failed (continuing without DB): {e}")
         return None
 
 
@@ -68,7 +68,7 @@ def mark_session_started(session_id: str) -> None:
         db.table("sessions").update({"status": "in_progress", "started_at": _now()}) \
           .eq("id", session_id).execute()
     except Exception as e:
-        print(f"❌ mark_session_started() failed: {e}")
+        print(f"[ERROR] mark_session_started() failed: {e}")
 
 
 def insert_answer(session_id: str, q_id: str, role: str, speaker: str,
@@ -84,7 +84,7 @@ def insert_answer(session_id: str, q_id: str, role: str, speaker: str,
             "category": category, "created_at": _now(),
         }).execute()
     except Exception as e:
-        print(f"❌ insert_answer() failed (continuing): {e}")
+        print(f"[ERROR] insert_answer() failed (continuing): {e}")
 
 
 def close_session(session_id: str, status: str, questions_reached: int) -> None:
@@ -97,9 +97,9 @@ def close_session(session_id: str, status: str, questions_reached: int) -> None:
             "status": status, "questions_reached": questions_reached,
             "ended_at": _now(),
         }).eq("id", session_id).execute()
-        print(f"🗄️  session closed → {status}")
+        print(f"[DB]  session closed → {status}")
     except Exception as e:
-        print(f"❌ close_session() failed: {e}")
+        print(f"[ERROR] close_session() failed: {e}")
 
 
 def read_answers(session_id: str) -> list:
@@ -113,7 +113,7 @@ def read_answers(session_id: str) -> list:
                .order("created_at").execute())
         return res.data or []
     except Exception as e:
-        print(f"❌ read_answers() failed: {e}")
+        print(f"[ERROR] read_answers() failed: {e}")
         return []
 
 
@@ -128,7 +128,7 @@ def get_session_context(session_id: str) -> dict:
         ).eq("id", session_id).execute()
         return res.data[0] if res.data else {}
     except Exception as e:
-        print(f"❌ get_session_context() failed: {e}")
+        print(f"[ERROR] get_session_context() failed: {e}")
         return {}
 
 
@@ -145,7 +145,7 @@ def get_candidate_for_session(session_id: str) -> dict:
         cand = db.table("candidates").select("*").eq("id", cid).execute()
         return cand.data[0] if cand.data else {}
     except Exception as e:
-        print(f"❌ get_candidate_for_session() failed: {e}")
+        print(f"[ERROR] get_candidate_for_session() failed: {e}")
         return {}
 
 
@@ -157,9 +157,9 @@ def save_report(session_id: str, report: dict) -> None:
     try:
         row = {"session_id": session_id, **report}
         db.table("reports").upsert(row, on_conflict="session_id").execute()
-        print(f"🗄️  report saved for session {session_id}")
+        print(f"[DB]  report saved for session {session_id}")
     except Exception as e:
-        print(f"❌ save_report() failed: {e}")
+        print(f"[ERROR] save_report() failed: {e}")
 
 
 def save_recording_url(session_id: str, url: str) -> None:
@@ -169,9 +169,9 @@ def save_recording_url(session_id: str, url: str) -> None:
         return
     try:
         db.table("sessions").update({"recording_url": url}).eq("id", session_id).execute()
-        print(f"🗄️  recording_url saved for session {session_id}")
+        print(f"[DB]  recording_url saved for session {session_id}")
     except Exception as e:
-        print(f"❌ save_recording_url() failed: {e}")
+        print(f"[ERROR] save_recording_url() failed: {e}")
 
 
 # ─── SCHEDULED INTERVIEWS (robust, survives restarts) ─────
@@ -192,7 +192,7 @@ def create_scheduled_interview(meeting_url: str, scheduled_for_iso: str,
         print(f"🗓️  scheduled interview {row['id']} for {scheduled_for_iso}")
         return row
     except Exception as e:
-        print(f"❌ create_scheduled_interview() failed: {e}")
+        print(f"[ERROR] create_scheduled_interview() failed: {e}")
         return None
 
 
@@ -204,7 +204,7 @@ def set_session_bot_id(session_id: str, bot_id: str) -> None:
     try:
         db.table("sessions").update({"bot_id": bot_id}).eq("id", session_id).execute()
     except Exception as e:
-        print(f"❌ set_session_bot_id() failed: {e}")
+        print(f"[ERROR] set_session_bot_id() failed: {e}")
 
 
 def due_scheduled_interviews() -> list:
@@ -219,7 +219,7 @@ def due_scheduled_interviews() -> list:
                .order("scheduled_for").execute())
         return res.data or []
     except Exception as e:
-        print(f"❌ due_scheduled_interviews() failed: {e}")
+        print(f"[ERROR] due_scheduled_interviews() failed: {e}")
         return []
 
 
@@ -231,7 +231,7 @@ def update_scheduled_interview(row_id: str, **fields) -> None:
     try:
         db.table("scheduled_interviews").update(fields).eq("id", row_id).execute()
     except Exception as e:
-        print(f"❌ update_scheduled_interview() failed: {e}")
+        print(f"[ERROR] update_scheduled_interview() failed: {e}")
 
 
 def list_scheduled_interviews(limit: int = 50) -> list:
@@ -244,7 +244,7 @@ def list_scheduled_interviews(limit: int = 50) -> list:
                .order("created_at", desc=True).limit(limit).execute())
         return res.data or []
     except Exception as e:
-        print(f"❌ list_scheduled_interviews() failed: {e}")
+        print(f"[ERROR] list_scheduled_interviews() failed: {e}")
         return []
 
 
@@ -271,7 +271,7 @@ def update_session_analysis(session_id, analysis: dict, meeting_url: str,
             "jd_text": jd_text, "resume_text": resume_text,
         }).eq("id", session_id).execute()
     except Exception as e:
-        print(f"❌ update_session_analysis() failed: {e}")
+        print(f"[ERROR] update_session_analysis() failed: {e}")
 
 
 def save_questions(session_id, questions: list) -> None:
@@ -290,7 +290,7 @@ def save_questions(session_id, questions: list) -> None:
         if rows:
             db.table("questions").insert(rows).execute()
     except Exception as e:
-        print(f"❌ save_questions() failed: {e}")
+        print(f"[ERROR] save_questions() failed: {e}")
 
 
 def get_questions(session_id) -> list:
@@ -303,7 +303,7 @@ def get_questions(session_id) -> list:
                .order("question_number").execute())
         return res.data or []
     except Exception as e:
-        print(f"❌ get_questions() failed: {e}")
+        print(f"[ERROR] get_questions() failed: {e}")
         return []
 
 
@@ -328,7 +328,7 @@ def list_sessions_with_reports() -> list:
             s.setdefault("created_at", s.get("started_at"))               # their time field
         return sess
     except Exception as e:
-        print(f"❌ list_sessions_with_reports() failed: {e}")
+        print(f"[ERROR] list_sessions_with_reports() failed: {e}")
         return []
 
 
@@ -383,7 +383,7 @@ def get_session_full(session_id) -> dict:
             "report": report or None,
         }
     except Exception as e:
-        print(f"❌ get_session_full() failed: {e}")
+        print(f"[ERROR] get_session_full() failed: {e}")
         return {}
 
 
@@ -396,5 +396,5 @@ def get_report(session_id) -> dict:
         res = db.table("reports").select("*").eq("session_id", session_id).execute()
         return res.data[0] if res.data else {}
     except Exception as e:
-        print(f"❌ get_report() failed: {e}")
+        print(f"[ERROR] get_report() failed: {e}")
         return {}
