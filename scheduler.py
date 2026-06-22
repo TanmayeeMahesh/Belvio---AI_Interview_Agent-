@@ -51,7 +51,7 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
     Returns True on success, False on failure.
     """
     if not to_email:
-        print("❌ send_invite: no candidate email provided")
+        print("[ERROR] send_invite: no candidate email provided")
         return False
 
     role_line = f" for the {role} position" if role else ""
@@ -61,7 +61,7 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
     # ── Method 1: SendGrid HTTP API (works in cloud, no domain needed) ──
     if SENDGRID_API_KEY:
         if not SENDGRID_FROM_EMAIL:
-            print("⚠️  SENDGRID_FROM_EMAIL not set in .env — add the Gmail you verified in SendGrid")
+            print("[WARN]  SENDGRID_FROM_EMAIL not set in .env — add the Gmail you verified in SendGrid")
         else:
             try:
                 resp = _http.post(
@@ -79,15 +79,15 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
                     timeout=15,
                 )
                 if resp.status_code == 202:   # SendGrid returns 202 Accepted on success
-                    print(f"📧 Invite sent via SendGrid to {to_email}")
+                    print(f"[EMAIL] Invite sent via SendGrid to {to_email}")
                     return True
-                print(f"⚠️  SendGrid returned {resp.status_code}: {resp.text[:200]}")
+                print(f"[WARN]  SendGrid returned {resp.status_code}: {resp.text[:200]}")
             except Exception as e:
-                print(f"⚠️  SendGrid error: {e}")
+                print(f"[WARN]  SendGrid error: {e}")
 
     # ── Method 2: Gmail SMTP (works locally, blocked on HF Spaces) ──────
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-        print("❌ send_invite: no email service configured — set SENDGRID_API_KEY or GMAIL creds in .env")
+        print("[ERROR] send_invite: no email service configured — set SENDGRID_API_KEY or GMAIL creds in .env")
         return False
 
     msg = EmailMessage()
@@ -103,15 +103,15 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
                 server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
                 server.send_message(msg)
         except (OSError, smtplib.SMTPException) as e465:
-            print(f"⚠️  SMTP port 465 failed ({e465}), trying STARTTLS port 587…")
+            print(f"[WARN]  SMTP port 465 failed ({e465}), trying STARTTLS port 587…")
             with smtplib.SMTP("smtp.gmail.com", 587) as server:
                 server.ehlo(); server.starttls(context=ctx); server.ehlo()
                 server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
                 server.send_message(msg)
-        print(f"📧 Invite sent via Gmail SMTP to {to_email}")
+        print(f"[EMAIL] Invite sent via Gmail SMTP to {to_email}")
         return True
     except Exception as e:
-        print(f"❌ send_invite failed: {e}")
+        print(f"[ERROR] send_invite failed: {e}")
         return False
 
 
@@ -133,7 +133,7 @@ def create_google_meet(subject: str, start_iso: str, end_iso: str,
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
     except ImportError:
-        print("❌ create_google_meet: run pip install google-auth google-auth-oauthlib google-api-python-client")
+        print("[ERROR] create_google_meet: run pip install google-auth google-auth-oauthlib google-api-python-client")
         return None
 
     creds = None
@@ -145,14 +145,14 @@ def create_google_meet(subject: str, start_iso: str, end_iso: str,
                 creds.refresh(Request())
             else:
                 if not os.path.exists("credentials.json"):
-                    print("❌ create_google_meet: credentials.json missing")
+                    print("[ERROR] create_google_meet: credentials.json missing")
                     return None
                 flow = InstalledAppFlow.from_client_secrets_file("credentials.json", GOOGLE_SCOPES)
                 creds = flow.run_local_server(port=0)
             with open("token.json", "w") as f:
                 f.write(creds.to_json())
         except Exception as e:
-            print(f"❌ create_google_meet auth failed: {e}")
+            print(f"[ERROR] create_google_meet auth failed: {e}")
             return None
 
     try:
@@ -172,8 +172,8 @@ def create_google_meet(subject: str, start_iso: str, end_iso: str,
             calendarId="primary", body=event,
             conferenceDataVersion=1, sendUpdates="all").execute()
         link = created.get("hangoutLink")
-        print(f"🎥 Google Meet created: {link}")
+        print(f"[MEET] Google Meet created: {link}")
         return link
     except Exception as e:
-        print(f"❌ create_google_meet failed: {e}")
+        print(f"[ERROR] create_google_meet failed: {e}")
         return None
