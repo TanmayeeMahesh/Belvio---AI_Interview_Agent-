@@ -116,17 +116,15 @@ def insert_answer(session_id: str, q_id: str, role: str, speaker: str,
 
 def close_session(session_id: str, status: str, questions_reached: int) -> None:
     """Mark the session finished with its completion status."""
-    db = _db()
-    if not db or not session_id:
+    if not session_id:
         return
-    try:
+    def op(db):
         db.table("sessions").update({
             "status": status, "questions_reached": questions_reached,
             "ended_at": _now(),
         }).eq("id", session_id).execute()
         print(f"[DB]  session closed → {status}")
-    except Exception as e:
-        print(f"[ERROR] close_session() failed: {e}")
+    _exec(op, label="close_session")
 
 
 def read_answers(session_id: str) -> list:
@@ -178,27 +176,23 @@ def get_candidate_for_session(session_id: str) -> dict:
 
 def save_report(session_id: str, report: dict) -> None:
     """Upsert the final report row (one per session)."""
-    db = _db()
-    if not db or not session_id:
+    if not session_id:
         return
-    try:
+    def op(db):
         row = {"session_id": session_id, **report}
         db.table("reports").upsert(row, on_conflict="session_id").execute()
         print(f"[DB]  report saved for session {session_id}")
-    except Exception as e:
-        print(f"[ERROR] save_report() failed: {e}")
+    _exec(op, label="save_report")
 
 
 def save_recording_url(session_id: str, url: str) -> None:
     """Store the Recall MP4 recording URL on the session (for the HR dashboard)."""
-    db = _db()
-    if not db or not session_id or not url:
+    if not session_id or not url:
         return
-    try:
+    def op(db):
         db.table("sessions").update({"recording_url": url}).eq("id", session_id).execute()
         print(f"[DB]  recording_url saved for session {session_id}")
-    except Exception as e:
-        print(f"[ERROR] save_recording_url() failed: {e}")
+    _exec(op, label="save_recording_url")
 
 
 # ─── SCHEDULED INTERVIEWS (robust, survives restarts) ─────
@@ -220,40 +214,30 @@ def create_scheduled_interview(meeting_url: str, scheduled_for_iso: str,
 
 def set_session_bot_id(session_id: str, bot_id: str) -> None:
     """Link a pre-created session (made at schedule time) to the bot that's now running it."""
-    db = _db()
-    if not db or not session_id:
+    if not session_id:
         return
-    try:
-        db.table("sessions").update({"bot_id": bot_id}).eq("id", session_id).execute()
-    except Exception as e:
-        print(f"[ERROR] set_session_bot_id() failed: {e}")
+    _exec(lambda db: db.table("sessions").update({"bot_id": bot_id}).eq("id", session_id).execute(),
+          label="set_session_bot_id")
 
 
 def due_scheduled_interviews() -> list:
-    """Rows that are due now (scheduled_for <= now) and still 'scheduled'."""
-    db = _db()
-    if not db:
-        return []
-    try:
+    """Rows that are due now (scheduled_for <= now) and still 'scheduled'.
+    Wrapped in _exec so a transient connection drop doesn't silently skip a due interview."""
+    def op(db):
         res = (db.table("scheduled_interviews").select("*")
                .eq("status", "scheduled")
                .lte("scheduled_for", _now())
                .order("scheduled_for").execute())
         return res.data or []
-    except Exception as e:
-        print(f"[ERROR] due_scheduled_interviews() failed: {e}")
-        return []
+    return _exec(op, default=[], label="due_scheduled_interviews")
 
 
 def update_scheduled_interview(row_id: str, **fields) -> None:
     """Patch a scheduled-interview row (status, bot_id, email_sent, ...)."""
-    db = _db()
-    if not db or not row_id:
+    if not row_id:
         return
-    try:
-        db.table("scheduled_interviews").update(fields).eq("id", row_id).execute()
-    except Exception as e:
-        print(f"[ERROR] update_scheduled_interview() failed: {e}")
+    _exec(lambda db: db.table("scheduled_interviews").update(fields).eq("id", row_id).execute(),
+          label="update_scheduled_interview")
 
 
 def list_scheduled_interviews(limit: int = 50) -> list:
