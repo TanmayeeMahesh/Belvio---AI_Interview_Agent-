@@ -31,6 +31,38 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_conn_error(e) -> bool:
+    """Transient dropped-connection errors worth one reconnect+retry (Supabase/httpx on idle HTTP/2)."""
+    s = str(e).lower()
+    return any(k in s for k in (
+        "server disconnected", "connectionterminated", "connection terminated",
+        "connection reset", "remotedisconnected", "connection aborted",
+        "broken pipe", "connection closed", "ConnectError".lower()))
+
+
+def _exec(op, default=None, label="db"):
+    """
+    Run a DB operation with ONE reconnect-and-retry on a dropped connection.
+    `op` is a function taking the supabase client. Fail-safe: returns `default` and logs
+    on terminal failure, so a DB blip never crashes the caller.
+    """
+    global _client
+    for attempt in range(2):
+        db = _db()
+        if not db:
+            return default
+        try:
+            return op(db)
+        except Exception as e:
+            if attempt == 0 and _is_conn_error(e):
+                print(f"[DB]  {label}: connection dropped — reconnecting & retrying once...")
+                _client = None          # force _db() to rebuild the client on the retry
+                continue
+            print(f"[ERROR] {label}() failed: {e}")
+            return default
+    return default
+
+
 def create_session(bot_id: str, total_questions: int,
                    candidate_name: str = None, candidate_email: str = None,
                    role: str = None, status: str = "in_progress") -> str | None:
@@ -38,10 +70,7 @@ def create_session(bot_id: str, total_questions: int,
     Create a candidate (minimal for now) + a session row. Returns session_id (uuid str) or None.
     status: 'in_progress' for live/manual starts; 'scheduled' when created at schedule time.
     """
-    db = _db()
-    if not db:
-        return None
-    try:
+    def op(db):
         cand = db.table("candidates").insert({
             "name": candidate_name, "email": candidate_email, "role": role,
         }).execute()
@@ -54,9 +83,7 @@ def create_session(bot_id: str, total_questions: int,
         sid = sess.data[0]["id"]
         print(f"[DB]  session created → {sid} ({status})")
         return sid
-    except Exception as e:
-        print(f"[ERROR] create_session() failed (continuing without DB): {e}")
-        return None
+    return _exec(op, default=None, label="create_session")
 
 
 def mark_session_started(session_id: str) -> None:
@@ -179,21 +206,16 @@ def create_scheduled_interview(meeting_url: str, scheduled_for_iso: str,
                                candidate_email: str = None, candidate_name: str = None,
                                role: str = None, session_id: str = None) -> dict | None:
     """Insert a scheduled-interview row. Returns the row (with id) or None."""
-    db = _db()
-    if not db:
-        return None
-    try:
+    def op(db):
         res = db.table("scheduled_interviews").insert({
             "meeting_url": meeting_url, "scheduled_for": scheduled_for_iso,
             "candidate_email": candidate_email, "candidate_name": candidate_name,
             "role": role, "status": "scheduled", "session_id": session_id,
         }).execute()
         row = res.data[0]
-        print(f"🗓️  scheduled interview {row['id']} for {scheduled_for_iso}")
+        print(f"[DB]  scheduled interview {row['id']} for {scheduled_for_iso}")
         return row
-    except Exception as e:
-        print(f"[ERROR] create_scheduled_interview() failed: {e}")
-        return None
+    return _exec(op, default=None, label="create_scheduled_interview")
 
 
 def set_session_bot_id(session_id: str, bot_id: str) -> None:
@@ -252,10 +274,9 @@ def list_scheduled_interviews(limit: int = 50) -> list:
 def update_session_analysis(session_id, analysis: dict, meeting_url: str,
                             scheduled_for_iso: str, jd_text=None, resume_text=None) -> None:
     """Store the JD/resume analysis + scheduling info on the session row (US-AG-01)."""
-    db = _db()
-    if not db or not session_id:
+    if not session_id:
         return
-    try:
+    def op(db):
         db.table("sessions").update({
             "candidate_name": analysis.get("candidateName"),
             "candidate_email": analysis.get("candidateEmail"),
@@ -270,27 +291,23 @@ def update_session_analysis(session_id, analysis: dict, meeting_url: str,
             "meeting_url": meeting_url, "scheduled_at": scheduled_for_iso,
             "jd_text": jd_text, "resume_text": resume_text,
         }).eq("id", session_id).execute()
-    except Exception as e:
-        print(f"[ERROR] update_session_analysis() failed: {e}")
+    _exec(op, label="update_session_analysis")
 
 
 def save_questions(session_id, questions: list) -> None:
     """Persist the generated dynamic question plan (US-AG-02)."""
-    db = _db()
-    if not db or not session_id:
+    if not session_id:
         return
-    try:
-        rows = [{
-            "session_id": session_id, "question_number": i + 1,
-            "question_text": q.get("question"), "topic": q.get("topic"),
-            "question_type": q.get("question_type"), "depth": q.get("depth"),
-            "target_skill": q.get("target_skill"), "key_concepts": q.get("key_concepts", []),
-            "status": "pending",
-        } for i, q in enumerate(questions)]
-        if rows:
-            db.table("questions").insert(rows).execute()
-    except Exception as e:
-        print(f"[ERROR] save_questions() failed: {e}")
+    rows = [{
+        "session_id": session_id, "question_number": i + 1,
+        "question_text": q.get("question"), "topic": q.get("topic"),
+        "question_type": q.get("question_type"), "depth": q.get("depth"),
+        "target_skill": q.get("target_skill"), "key_concepts": q.get("key_concepts", []),
+        "status": "pending",
+    } for i, q in enumerate(questions)]
+    if not rows:
+        return
+    _exec(lambda db: db.table("questions").insert(rows).execute(), label="save_questions")
 
 
 def get_questions(session_id) -> list:

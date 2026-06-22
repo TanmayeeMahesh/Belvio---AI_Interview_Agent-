@@ -188,6 +188,11 @@ def fetch_and_save_recording(bot_id, session_id):
             if r.status_code == 200:
                 data = r.json()
                 recs = data.get("recordings", [])
+                # DIAGNOSTIC: dump the full recording shape ONCE — even when the URL is found —
+                # so we can see exactly which tracks Recall produced (mixed vs separate, bot vs candidate).
+                if recs and attempt == 0:
+                    print(f"   🎥 [diag] recording[0] keys = {list(recs[0].keys())}")
+                    print(f"   🎥 [diag] media_shortcuts = {json.dumps(recs[0].get('media_shortcuts', {}))[:1500]}")
                 # search the whole recording object — the media_shortcuts key name varies by config
                 for rec in recs:
                     url = _find_download_url(rec)
@@ -200,9 +205,6 @@ def fetch_and_save_recording(bot_id, session_id):
                 else:
                     status_code = (recs[0].get("status") or {}).get("code", "?")
                     print(f"   🎥 {len(recs)} rec(s), status={status_code!r}, URL not ready (attempt {attempt+1}/20)...")
-                    if attempt == 0:
-                        # one-time dump so we can see the real media_shortcuts shape if URL never appears
-                        print(f"   🎥 media_shortcuts = {json.dumps(recs[0].get('media_shortcuts', {}))[:800]}")
             else:
                 print(f"   🎥 API {r.status_code} (attempt {attempt+1}/20)...")
         except Exception as e:
@@ -448,21 +450,22 @@ Reply with ONLY the rephrased spoken question."""
         print(f"❌ rephrase_question(): {e}"); return f"Let me put it differently. {question}"
 
 def transition_line(answer, next_question) -> str:
+    """Returns ONLY a brief acknowledgment/segue — NOT the question. The caller appends the
+    verbatim question, so the question is always asked clearly (never paraphrased away)."""
     prompt = f"""{IO_CONTEXT}
 
 The candidate just said: "{answer}"
-The next question to ask is: "{next_question}"
 
-Briefly acknowledge something specific they said (one short clause), then naturally lead into asking
-the next question. Sound like a human interviewer segueing — do NOT say "Next" or "Question 5".
-Reply with ONLY the spoken sentence(s)."""
+Briefly acknowledge something specific they said in ONE short clause, then add a natural lead-in
+like "Let's move on." Do NOT ask any question and do NOT add a new topic — only the acknowledgment
+and the short segue. Reply with ONLY that short spoken sentence."""
     try:
         resp = groq_client.chat.completions.create(
             model=REPLY_MODEL, messages=[{"role": "user", "content": prompt}],
-            max_tokens=110, temperature=0.7)
-        return resp.choices[0].message.content.strip().strip('"') or f"Thank you. {next_question}"
+            max_tokens=60, temperature=0.7)
+        return resp.choices[0].message.content.strip().strip('"') or "Thank you. Let's move on."
     except Exception as e:
-        print(f"❌ transition_line(): {e}"); return f"Thank you. {next_question}"
+        print(f"❌ transition_line(): {e}"); return "Thank you. Let's move on."
 
 def ack_line(answer) -> str:
     prompt = f"""{IO_CONTEXT}
@@ -555,8 +558,11 @@ def process_answer(sess: Session, candidate_text: str):
     sess.confirming_completion = False
     last = sess.last_asked or q_now
 
-    if any(p in low for p in ["repeat", "say again", "come again", "didn't catch", "didn't hear"]):
-        print(f"🔁 [{sess.bot_id[:8]}] Meta: repeat last-asked"); speak(sess, f"Of course. {last}"); return
+    if any(p in low for p in ["repeat", "say again", "come again", "didn't catch", "didn't hear",
+                              "what's my question", "what is my question", "what's the question",
+                              "what was the question", "what's my next question", "didn't get the question",
+                              "ask me the question", "i didn't hear a question", "you didn't ask"]):
+        print(f"🔁 [{sess.bot_id[:8]}] Meta: restate last-asked"); speak(sess, f"Of course. {last}"); return
     if any(p in low for p in ["don't understand", "didn't understand", "not clear", "what do you mean", "confused", "rephrase"]):
         print(f"💡 [{sess.bot_id[:8]}] Meta: rephrase"); speak(sess, rephrase_question(last, item["key_concepts"])); return
     if any(p in low for p in ["still thinking", "give me a moment", "one moment", "hold on", "let me think"]):
@@ -613,9 +619,12 @@ def advance(sess: Session, last_answer: str):
         if cc.get("already_answered") and cc.get("adjusted_question"):
             ack = ack_line(last_answer)
             to_say = f"{ack} {cc.get('acknowledgment','')} {cc['adjusted_question']}"
+            sess.last_asked = cc["adjusted_question"]
         else:
-            to_say = transition_line(last_answer, nxt["question"])
-        sess.last_asked = nxt["question"]
+            # segue (ack only) + the VERBATIM question, so the question is always asked clearly
+            segue = transition_line(last_answer, nxt["question"])
+            to_say = f"{segue} {nxt['question']}"
+            sess.last_asked = nxt["question"]
         log_to_transcript(sess, BOT_NAME, to_say, topic=nxt["topic"], q_id=str(nxt_num), role="question")
         speak(sess, to_say)
     else:
@@ -693,6 +702,9 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
         "bot_name": BOT_NAME, "meeting_url": meeting_url,
         "recording_config": {
             "audio_mixed_mp4": {},   # both bot TTS + candidate voice, audio-only (US-AG-06)
+            # force the bot's own output_audio into the mix (bypasses platform echo cancellation,
+            # which otherwise leaves only the candidate's voice in the recording). Default is false.
+            "include_bot_in_recording": {"audio": True},
             # TODO: upload to Azure Blob for permanent storage; Recall URL expires ~7 days
             "transcript": {"provider": {"recallai_streaming": {
                 "mode": "prioritize_low_latency", "language_code": "en"}}},
