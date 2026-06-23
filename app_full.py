@@ -177,6 +177,25 @@ def _find_download_url(obj):
                 return found
     return None
 
+def get_fresh_recording_url(bot_id):
+    """Re-fetch a CURRENT pre-signed recording URL from Recall on demand.
+    Recall's download URLs expire in hours, so we never reuse a cached one — we ask for a fresh
+    link each time the dashboard wants to play/download the recording."""
+    if not bot_id:
+        return None
+    try:
+        r = requests.get(f"{RECALL_BASE}/bot/{bot_id}/", headers=recall_headers())
+        if r.status_code == 200:
+            for rec in r.json().get("recordings", []):
+                url = _find_download_url(rec)
+                if url:
+                    return url
+        else:
+            print(f"❌ get_fresh_recording_url: Recall API {r.status_code}")
+    except Exception as e:
+        print(f"❌ get_fresh_recording_url(): {e}")
+    return None
+
 def fetch_and_save_recording(bot_id, session_id):
     """Retrieve the recording download URL after the call and save it (US-AG-06). S3 URL is temporary."""
     if not session_id:

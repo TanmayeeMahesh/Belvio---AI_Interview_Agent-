@@ -88,6 +88,8 @@ export default function Reports({ token, defaultSessionId }) {
   const [error, setError] = useState('')
   const [showTranscript, setShowTranscript] = useState(false)
   const [sortBy, setSortBy] = useState('date-desc')
+  const [recUrl, setRecUrl] = useState(null)        // fresh, on-demand recording URL
+  const [recState, setRecState] = useState('idle')  // idle | loading | ready | none
 
   useEffect(() => {
     API.get('/api/hr/sessions', { headers: { authorization: `Bearer ${token}` } })
@@ -105,6 +107,7 @@ export default function Reports({ token, defaultSessionId }) {
     setFullData(null)
     setShowTranscript(false)
     setError('')
+    setRecUrl(null); setRecState('idle')
     fetchSession(id)
   }
 
@@ -113,6 +116,7 @@ export default function Reports({ token, defaultSessionId }) {
     setFullData(null)
     setShowTranscript(false)
     setError('')
+    setRecUrl(null); setRecState('idle')
   }
 
   async function fetchSession(id) {
@@ -120,10 +124,23 @@ export default function Reports({ token, defaultSessionId }) {
     try {
       const { data } = await API.get(`/api/hr/session/${id}`, { headers: { authorization: `Bearer ${token}` } })
       setFullData(data)
+      // a saved recording_url means a recording exists — but it's expired/stale, so fetch a fresh one
+      if (data.session?.recording_url) loadRecording(id)
+      else setRecState('none')
     } catch (e) {
       setError(e.response?.status === 404 ? 'Session not found.' : 'Failed to load report.')
     }
     setLoading(false)
+  }
+
+  async function loadRecording(id) {
+    setRecState('loading'); setRecUrl(null)
+    try {
+      const { data } = await API.get(`/api/hr/session/${id}/recording`, { headers: { authorization: `Bearer ${token}` } })
+      setRecUrl(data.url); setRecState('ready')
+    } catch (e) {
+      setRecState('none')
+    }
   }
 
   async function downloadPdf(id) {
@@ -269,17 +286,28 @@ export default function Reports({ token, defaultSessionId }) {
             )}
           </div>
 
-          {/* Recording */}
+          {/* Recording — always uses a freshly-fetched URL (Recall's links expire in hours) */}
           {sess.recording_url ? (
             <div className="card" style={{ padding: 20 }}>
               <div className="flex-between" style={{ marginBottom: 12 }}>
                 <div style={{ fontWeight: 600 }}>Interview Recording</div>
-                <a href={sess.recording_url} target="_blank" rel="noreferrer"
-                   className="btn-ghost btn-sm" style={{ textDecoration: 'none' }}>⬇ Download</a>
+                {recState === 'ready' && (
+                  <a href={recUrl} target="_blank" rel="noreferrer"
+                     className="btn-ghost btn-sm" style={{ textDecoration: 'none' }}>⬇ Download</a>
+                )}
               </div>
-              <audio controls preload="none" src={sess.recording_url} style={{ width: '100%' }}>
-                Your browser can’t play this audio — use the download link above.
-              </audio>
+              {recState === 'loading' && <div className="text-secondary text-sm">Loading recording…</div>}
+              {recState === 'ready' && (
+                <audio controls preload="none" src={recUrl} style={{ width: '100%' }}>
+                  Your browser can’t play this audio — use the download link above.
+                </audio>
+              )}
+              {recState === 'none' && (
+                <div className="text-secondary text-sm">
+                  Recording link couldn’t be retrieved (it may have aged out on Recall).{' '}
+                  <button className="btn-ghost btn-sm" onClick={() => loadRecording(selectedId)}>Retry</button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="card" style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>

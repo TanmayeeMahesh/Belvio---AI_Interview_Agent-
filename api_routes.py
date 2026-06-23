@@ -158,6 +158,21 @@ def hr_report(session_id: str, authorization: str = Header(None)):
     _require_user(authorization)
     return db.get_report(session_id)
 
+@router.get("/api/hr/session/{session_id}/recording")
+def hr_recording_url(session_id: str, authorization: str = Header(None)):
+    """Return a FRESH pre-signed recording URL (Recall's links expire in hours, so we re-fetch
+    on demand using the session's bot_id instead of serving the stale cached URL)."""
+    _require_user(authorization)
+    bot_id = db.get_bot_id_for_session(session_id)
+    if not bot_id:
+        raise HTTPException(status_code=404, detail="No recording for this session")
+    import app_full  # lazy import avoids a circular import at module load
+    url = app_full.get_fresh_recording_url(bot_id)
+    if not url:
+        raise HTTPException(status_code=404, detail="Recording not available yet")
+    return {"url": url}
+
+
 @router.get("/api/hr/report/{session_id}/pdf")
 def hr_report_pdf(session_id: str, authorization: str = Header(None)):
     _require_user(authorization)

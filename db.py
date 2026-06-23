@@ -186,13 +186,25 @@ def save_report(session_id: str, report: dict) -> None:
 
 
 def save_recording_url(session_id: str, url: str) -> None:
-    """Store the Recall MP4 recording URL on the session (for the HR dashboard)."""
+    """Store the Recall MP4 recording URL on the session (for the HR dashboard).
+    Note: this URL is a short-lived pre-signed link (a 'recording exists' flag) — for playback the
+    dashboard re-fetches a fresh URL on demand via the bot_id, since cached ones expire in hours."""
     if not session_id or not url:
         return
     def op(db):
         db.table("sessions").update({"recording_url": url}).eq("id", session_id).execute()
         print(f"[DB]  recording_url saved for session {session_id}")
     _exec(op, label="save_recording_url")
+
+
+def get_bot_id_for_session(session_id: str) -> str | None:
+    """Return the bot_id linked to a session (used to re-fetch a fresh recording URL)."""
+    if not session_id:
+        return None
+    def op(db):
+        res = db.table("sessions").select("bot_id").eq("id", session_id).execute()
+        return res.data[0].get("bot_id") if res.data else None
+    return _exec(op, default=None, label="get_bot_id_for_session")
 
 
 # ─── SCHEDULED INTERVIEWS (robust, survives restarts) ─────
