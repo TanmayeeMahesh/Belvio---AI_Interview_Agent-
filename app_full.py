@@ -34,6 +34,14 @@ RECALLAI_API_KEY = os.getenv("RECALLAI_API_KEY")
 NGROK_URL        = os.getenv("NGROK_URL")
 GROQ_API_KEY     = os.getenv("GROQ_API_KEY")
 
+# ─── TTS (pluggable: Sarvam for Indian voices, gTTS as the free fallback) ──
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+# default to Sarvam when a key is present, else gTTS; override with TTS_PROVIDER=gtts|sarvam
+TTS_PROVIDER   = os.getenv("TTS_PROVIDER", "sarvam" if SARVAM_API_KEY else "gtts").lower()
+SARVAM_MODEL   = os.getenv("SARVAM_MODEL", "bulbul:v2")    # documented; v2 default speaker = anushka
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "anushka")
+SARVAM_LANG    = os.getenv("SARVAM_LANG", "en-IN")
+
 BOT_NAME    = "AI Interviewer (Sandbox)"
 RECALL_BASE = f"https://{os.getenv('RECALL_REGION', 'ap-northeast-1')}.recall.ai/api/v1"
 GATE_MODEL  = "llama-3.1-8b-instant"
@@ -117,14 +125,44 @@ def _normalize_questions(rows: list) -> list:
     return [q for q in out if q["question"]]
 
 
+# ─── TEXT-TO-SPEECH (returns base64 MP3 — the only kind Recall output_audio accepts) ──
+def _gtts_mp3_b64(text: str) -> str:
+    buf = io.BytesIO()
+    gTTS(text=text, lang="en", slow=False).write_to_fp(buf)
+    return base64.b64encode(buf.getvalue()).decode()
+
+def _sarvam_mp3_b64(text: str):
+    """Sarvam Bulbul TTS → base64 MP3 (output_audio_codec=mp3, so no transcoding). None on failure."""
+    r = requests.post("https://api.sarvam.ai/text-to-speech",
+        headers={"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"},
+        json={"text": text, "target_language_code": SARVAM_LANG, "speaker": SARVAM_SPEAKER,
+              "model": SARVAM_MODEL, "output_audio_codec": "mp3"},
+        timeout=20)
+    if r.status_code == 200:
+        audios = r.json().get("audios") or []
+        if audios and audios[0]:
+            return audios[0]            # already base64-encoded MP3
+    print(f"⚠️ Sarvam TTS {r.status_code}: {r.text[:150]} — falling back to gTTS")
+    return None
+
+def synthesize_mp3_b64(text: str) -> str:
+    """Base64 MP3 for `text`. Uses Sarvam (Indian voices) when configured, always falls back to
+    gTTS so TTS never hard-fails. Both return standard-alphabet base64 MP3 for Recall."""
+    if TTS_PROVIDER == "sarvam" and SARVAM_API_KEY:
+        try:
+            b64 = _sarvam_mp3_b64(text)
+            if b64:
+                return b64
+        except Exception as e:
+            print(f"⚠️ Sarvam TTS error: {e} — falling back to gTTS")
+    return _gtts_mp3_b64(text)
+
 # ─── SPEAK (per-session serialized + blocking so audio never overlaps) ─
 def speak(sess: Session, text: str):
     with sess.speak_lock:
         sess.bot_speaking = True
         try:
-            buf = io.BytesIO()
-            gTTS(text=text, lang="en", slow=False).write_to_fp(buf)
-            b64 = base64.b64encode(buf.getvalue()).decode()
+            b64 = synthesize_mp3_b64(text)
             for _att in range(2):
                 r = requests.post(f"{RECALL_BASE}/bot/{sess.bot_id}/output_audio/",
                                   headers=recall_headers(), json={"kind": "mp3", "b64_data": b64})
