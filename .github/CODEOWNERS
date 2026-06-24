@@ -1,0 +1,8 @@
+# Any PR touching these REQUIRES your approval, automatically
+app_full.py      @TanmayeeMahesh
+evaluator.py     @TanmayeeMahesh
+extraction.py    @TanmayeeMahesh
+db.py            @TanmayeeMahesh
+api_routes.py    @TanmayeeMahesh
+auth.py          @TanmayeeMahesh
+scheduler.py     @TanmayeeMahesh
