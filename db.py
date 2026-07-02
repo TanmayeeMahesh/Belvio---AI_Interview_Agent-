@@ -63,28 +63,69 @@ def _exec(op, default=None, label="db"):
     return default
 
 
-def create_session(bot_id: str, total_questions: int,
-                   candidate_name: str = None, candidate_email: str = None,
-                   role: str = None, status: str = "in_progress") -> str | None:
+def create_session(
+    bot_id: str,
+    total_questions: int,
+    candidate_name: str = None,
+    candidate_email: str = None,
+    role: str = None,
+    status: str = "in_progress",
+    organization_id: str = None
+) -> str | None:
     """
-    Create a candidate (minimal for now) + a session row. Returns session_id (uuid str) or None.
-    status: 'in_progress' for live/manual starts; 'scheduled' when created at schedule time.
+    Create a candidate (minimal for now) + a session row.
+    Returns session_id (uuid str) or None.
     """
+
     def op(db):
-        cand = db.table("candidates").insert({
-            "name": candidate_name, "email": candidate_email, "role": role,
-        }).execute()
-        candidate_id = cand.data[0]["id"]
+
+        # Check if candidate already exists
+        existing = (
+            db.table("candidates")
+            .select("*")
+            .eq("email", candidate_email)
+            .execute()
+        )
+
+        if existing.data:
+            candidate_id = existing.data[0]["id"]
+        else:
+            cand = db.table("candidates").insert({
+                "name": candidate_name,
+                "email": candidate_email,
+                "role": role,
+            }).execute()
+
+            candidate_id = cand.data[0]["id"]
+
+        # Create session
         sess = db.table("sessions").insert({
-            "candidate_id": candidate_id, "bot_id": bot_id,
-            "status": status, "total_questions": total_questions,
-            "started_at": _now(),
-        }).execute()
+    "candidate_id": candidate_id,
+    "bot_id": bot_id,
+    "status": status,
+    "total_questions": total_questions,
+    "started_at": _now(),
+    "organization_id": organization_id
+}).execute()
+
         sid = sess.data[0]["id"]
         print(f"[DB]  session created → {sid} ({status})")
         return sid
+
     return _exec(op, default=None, label="create_session")
 
+def update_session_status(session_id: str, status: str):
+    if not session_id:
+        return
+
+    try:
+        _db().table("sessions").update({
+            "status": status
+        }).eq("id", session_id).execute()
+
+        print(f"[DB] session status -> {status}")
+    except Exception as e:
+        print(f"[ERROR] update_session_status(): {e}")
 
 def mark_session_started(session_id: str) -> None:
     """Flip a scheduled session to in_progress when the candidate consents and the interview begins."""
@@ -183,6 +224,13 @@ def save_report(session_id: str, report: dict) -> None:
         db.table("reports").upsert(row, on_conflict="session_id").execute()
         print(f"[DB]  report saved for session {session_id}")
     _exec(op, label="save_report")
+    
+    
+def require_role(ctx, allowed_roles):
+    if ctx["role"] not in allowed_roles:
+        raise ValueError(
+            f"Required role: {allowed_roles}"
+        )    
 
 
 def save_recording_url(session_id: str, url: str) -> None:
@@ -208,16 +256,27 @@ def get_bot_id_for_session(session_id: str) -> str | None:
 
 
 # ─── SCHEDULED INTERVIEWS (robust, survives restarts) ─────
-def create_scheduled_interview(meeting_url: str, scheduled_for_iso: str,
-                               candidate_email: str = None, candidate_name: str = None,
-                               role: str = None, session_id: str = None) -> dict | None:
+def create_scheduled_interview(
+    meeting_url: str,
+    scheduled_for_iso: str,
+    candidate_email: str = None,
+    candidate_name: str = None,
+    role: str = None,
+    session_id: str = None,
+    organization_id: str = None
+) -> dict | None:
     """Insert a scheduled-interview row. Returns the row (with id) or None."""
     def op(db):
         res = db.table("scheduled_interviews").insert({
-            "meeting_url": meeting_url, "scheduled_for": scheduled_for_iso,
-            "candidate_email": candidate_email, "candidate_name": candidate_name,
-            "role": role, "status": "scheduled", "session_id": session_id,
-        }).execute()
+    "meeting_url": meeting_url,
+    "scheduled_for": scheduled_for_iso,
+    "candidate_email": candidate_email,
+    "candidate_name": candidate_name,
+    "role": role,
+    "status": "scheduled",
+    "session_id": session_id,
+    "organization_id": organization_id
+}).execute()
         row = res.data[0]
         print(f"[DB]  scheduled interview {row['id']} for {scheduled_for_iso}")
         return row
@@ -320,7 +379,7 @@ def get_questions(session_id) -> list:
         return []
 
 
-def list_sessions_with_reports() -> list:
+def list_sessions_with_reports(org_id=None) -> list:
     """
     Dashboard list, shaped for their frontend:
     adds recommendation/overall_score, selection_status (their SessionsTab filter field),
@@ -330,7 +389,12 @@ def list_sessions_with_reports() -> list:
     if not db:
         return []
     try:
-        sess = (db.table("sessions").select("*").order("started_at", desc=True).execute()).data or []
+        query = db.table("sessions").select("*")
+
+        if org_id:
+            query = query.eq("organization_id", org_id)
+
+        sess = query.order("started_at", desc=True).execute().data or []
         reps = (db.table("reports").select("session_id, recommendation, overall_score").execute()).data or []
         rep_map = {r["session_id"]: r for r in reps}
         for s in sess:

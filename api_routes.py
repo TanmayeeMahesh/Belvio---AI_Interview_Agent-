@@ -23,6 +23,8 @@ from fastapi.responses import FileResponse, JSONResponse
 import db, extraction, scheduler, auth, report_pdf, evaluator
 from supabase import create_client as _supa_create
 import os as _os
+from pydantic import BaseModel
+from fastapi import Header, HTTPException
 
 router = APIRouter()
 
@@ -30,6 +32,417 @@ UPLOAD_DIR = os.path.join("uploads", "documents")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
+
+
+from pydantic import BaseModel
+
+class CheckEmailRequest(BaseModel):
+    email: str
+
+class CompleteRegistrationRequest(BaseModel):
+    email: str
+    password: str
+
+
+class CreateOrganizationRequest(BaseModel):
+    organization_name: str
+    admin_email: str
+    
+    
+class CompleteRegistrationRequest(BaseModel):
+    email: str
+    password: str    
+ 
+class CreateJobOpeningRequest(BaseModel):
+    title: str
+    description: str
+    jd_text: str 
+    
+ 
+class CreateCandidateRequest(BaseModel):
+    name: str
+    email: str
+    role: str
+    job_opening_id: str
+    
+class ScheduleCandidateRequest(BaseModel):
+    meeting_url: str
+    question_count: int = 12
+    delay_minutes: int = 30    
+    
+    
+@router.post("/api/candidates")
+async def create_candidate(
+    body: CreateCandidateRequest,
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("candidates")
+        .insert({
+            "name": body.name,
+            "email": body.email,
+            "role": body.role,
+            "job_opening_id": body.job_opening_id,
+            "organization_id": org_id
+        })
+        .execute()
+    )
+
+    return result.data[0]
+
+@router.get("/api/candidates")
+def list_candidates(
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("candidates")
+        .select("*")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    return result.data
+
+
+@router.get("/api/job-openings/{job_id}/candidates")
+def candidates_for_job(job_id: str):
+
+    result = (
+        db._db()
+        .table("candidates")
+        .select("*")
+        .eq("job_opening_id", job_id)
+        .execute()
+    )
+
+    return result.data
+
+
+@router.get("/api/dashboard/org-admin")
+def org_admin_dashboard(
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    hrs = (
+        db._db()
+        .table("organization_users")
+        .select("*", count="exact")
+        .eq("role", "HR")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    jobs = (
+        db._db()
+        .table("job_openings")
+        .select("*", count="exact")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    candidates = (
+        db._db()
+        .table("candidates")
+        .select("*", count="exact")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    interviews = (
+        db._db()
+        .table("scheduled_interviews")
+        .select("*", count="exact")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    return {
+        "hrs": hrs.count,
+        "job_openings": jobs.count,
+        "candidates": candidates.count,
+        "scheduled_interviews": interviews.count
+    }
+     
+@router.get("/api/dashboard/super-admin")
+def super_admin_dashboard():
+
+    organizations = (
+        db._db()
+        .table("organizations")
+        .select("*", count="exact")
+        .execute()
+    )
+
+    org_admins = (
+        db._db()
+        .table("organization_users")
+        .select("*", count="exact")
+        .eq("role", "ORG_ADMIN")
+        .execute()
+    )
+
+    hrs = (
+        db._db()
+        .table("organization_users")
+        .select("*", count="exact")
+        .eq("role", "HR")
+        .execute()
+    )
+
+    job_openings = (
+        db._db()
+        .table("job_openings")
+        .select("*", count="exact")
+        .execute()
+    )
+
+    candidates = (
+        db._db()
+        .table("candidates")
+        .select("*", count="exact")
+        .execute()
+    )
+
+    interviews = (
+        db._db()
+        .table("scheduled_interviews")
+        .select("*", count="exact")
+        .execute()
+    )
+
+    return {
+        "organizations": organizations.count,
+        "org_admins": org_admins.count,
+        "hrs": hrs.count,
+        "job_openings": job_openings.count,
+        "candidates": candidates.count,
+        "interviews": interviews.count
+    }
+    
+@router.post("/api/job-openings")
+async def create_job_opening(
+    body: CreateJobOpeningRequest,
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("job_openings")
+        .insert({
+            "organization_id": org_id,
+            "title": body.title,
+            "description": body.description,
+            "jd_text": body.jd_text,
+            "status": "ACTIVE"
+        })
+        .execute()
+    )
+
+    return result.data[0]
+
+@router.get("/api/job-openings")
+def list_job_openings(
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("job_openings")
+        .select("*")
+        .eq("organization_id", org_id)
+        .execute()
+    )
+
+    return result.data
+    
+ 
+    
+        
+    
+@router.post("/api/auth/complete-registration")
+async def complete_registration(
+    body: CompleteRegistrationRequest
+):
+
+    email = body.email.strip().lower()
+    password = body.password
+
+    existing = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("email", email)
+        .execute()
+    )
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Email not found"
+        )
+
+    org_user = existing.data[0]
+
+    if org_user["status"] == "ACTIVE":
+        raise HTTPException(
+            status_code=400,
+            detail="Account already activated"
+        )
+
+    sb = db._db()
+
+    auth_user = sb.auth.sign_up({
+        "email": email,
+        "password": password
+    })
+    
+    print("AUTH USER =", auth_user)
+    print("AUTH USER ID =", auth_user.user.id if auth_user.user else None)
+
+    user_id = auth_user.user.id
+
+    (
+        db._db()
+        .table("organization_users")
+        .update({
+            "user_id": user_id,
+            "status": "ACTIVE"
+        })
+        .eq("id", org_user["id"])
+        .execute()
+    )
+
+    return {
+        "message": "Registration completed"
+    }
+    
+ 
+class CreateHRRequest(BaseModel):
+    email: str
+
+
+
+@router.post("/api/auth/check-email")
+async def check_email(body: CheckEmailRequest):
+
+    email = body.email.strip().lower()
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("email", email)
+        .execute()
+    )
+
+    if not result.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Email not found"
+        )
+
+    user = result.data[0]
+
+    return {
+        "exists": True,
+        "status": user["status"],
+        "role": user["role"]
+    }
+        
+@router.post("/api/org-admin/create-hr")
+async def create_hr(
+    body: CreateHRRequest,
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    if ctx["role"] != "ORG_ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Only ORG_ADMIN can create HRs"
+        )
+
+    email = body.email.strip().lower()
+
+    existing = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("email", email)
+        .execute()
+    )
+
+    if existing.data:
+        raise HTTPException(
+            status_code=400,
+            detail="User already exists"
+        )
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .insert({
+            "organization_id": ctx["organization_id"],
+            "email": email,
+            "role": "HR",
+            "status": "PENDING"
+        })
+        .execute()
+    )
+
+    return result.data[0]            
+
+
+async def check_email(body: CheckEmailRequest):
+
+    email = body.email.strip().lower()
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("email", email)
+        .execute()
+    )
+
+    if not result.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Email not found"
+        )
+
+    user = result.data[0]
+
+    return {
+        "exists": True,
+        "status": user["status"],
+        "role": user["role"]
+    }
+    
+        
 # ─── AUTH LOGIN ───────────────────────────────────────────
 @router.post("/api/auth/login")
 async def login(request: Request):
@@ -47,11 +460,508 @@ async def login(request: Request):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
 
+@router.get("/api/me")
+def me(authorization: str = Header(None)):
+
+    user = _require_user(authorization)
+
+    ctx = auth.get_user_context(
+        auth.user_id_from(user)
+    )
+
+    return {
+        "user": user,
+        "context": ctx
+    }
+    
+    
+
+
+
+@router.get("/api/test-role")
+def test_role():
+
+    return auth.get_user_context(
+        "da0c3caa-e907-4f1c-8747-e727f608dbd7"
+    )
+
+
+@router.get("/api/test-orgs")
+def test_orgs():
+
+    result = (
+        db._db()
+        .table("organizations")
+        .select("*")
+        .execute()
+    )
+
+    return result.data
+
+
+def _require_context(authorization: str):
+    user = _require_user(authorization)
+
+    ctx = auth.get_user_context(
+        auth.user_id_from(user)
+    )
+
+    if not ctx:
+        raise HTTPException(
+            status_code=403,
+            detail="User not assigned to any organization"
+        )
+
+    return user, ctx
+
+
+  
+
+ 
+@router.post("/api/admin/invite-org-admin")
+async def invite_org_admin(
+    request: Request,
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    if ctx["role"] != "SUPER_ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Only SUPER_ADMIN can invite Org Admins"
+        )
+
+    body = await request.json()
+
+    email = (body.get("email") or "").strip()
+    organization_id = body.get("organization_id")
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email required"
+        )
+
+    result = (
+        db._db()
+        .table("organization_invites")
+        .insert({
+            "email": email,
+            "organization_id": organization_id,
+            "role": "ORG_ADMIN"
+        })
+        .execute()
+    )
+
+    return result.data[0]
+@router.get("/api/test-invites")
+def test_invites():
+
+    result = (
+        db._db()
+        .table("organization_invites")
+        .select("*")
+        .execute()
+    )
+
+    return result.data
+ 
+    
+    
+@router.get("/api/whoami")
+def whoami(
+    authorization: str = Header(None, alias="Authorization")
+):
+
+    user, ctx = _require_context(authorization)
+
+    return {
+        "email": user["email"],
+        "role": ctx["role"],
+        "organization_id": ctx["organization_id"]
+    }
+
+@router.get("/api/debug-header")
+def debug_header(
+    authorization: str = Header(None, alias="Authorization")
+):
+    return {
+        "authorization": authorization
+    }
+    
+    
+@router.get("/api/test-google")
+def test_google():
+
+    return auth.get_user_context(
+        "ef03406f-1c0f-459c-859d-ff8328a598c5"
+    )    
+    
 def _require_user(authorization):
     try:
         return auth.verify_token(authorization)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+
+
+
+@router.post("/api/admin/organizations")
+async def create_organization(
+    request: Request,
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    if ctx["role"] != "SUPER_ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Only SUPER_ADMIN can create organizations"
+        )
+
+    body = await request.json()
+
+    name = (body.get("name") or "").strip()
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Organization name required"
+        )
+
+    result = (
+        db._db()
+        .table("organizations")
+        .insert({
+            "name": name,
+            "status": "active"
+        })
+        .execute()
+    )
+
+    return result.data[0]
+
+
+
+@router.post("/api/admin/create-organization")
+async def create_organization(
+    body: CreateOrganizationRequest
+):
+
+    organization_name = body.organization_name
+    admin_email = body.admin_email
+
+    org = (
+        db._db()
+        .table("organizations")
+        .insert({
+            "name": organization_name,
+            "status": "active"
+        })
+        .execute()
+    )
+
+    org_id = org.data[0]["id"]
+
+    (
+        db._db()
+        .table("organization_users")
+        .insert({
+            "organization_id": org_id,
+            "role": "ORG_ADMIN",
+            "email": admin_email,
+            "status": "PENDING"
+        })
+        .execute()
+    )
+
+    return {
+        "organization_id": org_id,
+        "organization_name": organization_name,
+        "admin_email": admin_email,
+        "status": "created"
+    }
+
+@router.get("/api/admin/organizations")
+def list_organizations(
+    authorization: str = Header(None)
+):
+    ctx = auth.get_user_context(
+    "da0c3caa-e907-4f1c-8747-e727f608dbd7"
+)
+
+    if ctx["role"] != "SUPER_ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Only SUPER_ADMIN can view organizations"
+        )
+
+    result = (
+        db._db()
+        .table("organizations")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data
+
+
+
+
+@router.get("/api/admin/organizations/{organization_id}")
+def organization_details(
+    organization_id: str
+):
+
+    org = (
+        db._db()
+        .table("organizations")
+        .select("*")
+        .eq("id", organization_id)
+        .single()
+        .execute()
+    )
+
+    users = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("organization_id", organization_id)
+        .execute()
+    )
+
+    return {
+        "organization": org.data,
+        "users": users.data
+    }
+@router.get("/api/admin/users")
+def list_all_users():
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .execute()
+    )
+
+    return result.data
+
+
+@router.get("/api/org-admin/hrs")
+def list_hrs(
+    authorization: str = Header(None)
+):
+
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("organization_id", org_id)
+        .eq("role", "HR")
+        .execute()
+    )
+
+    return result.data
+
+@router.delete("/api/org-admin/hr/{hr_id}")
+def delete_hr(hr_id: str):
+
+    result = (
+        db._db()
+        .table("organization_users")
+        .delete()
+        .eq("id", hr_id)
+        .execute()
+    )
+
+    return {
+        "message": "HR deleted"
+    }
+from datetime import datetime, timedelta, timezone
+
+@router.post("/api/candidate/{candidate_id}/schedule")
+def schedule_candidate(
+    candidate_id: str,
+    body: ScheduleCandidateRequest,
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    candidate_res = (
+        db._db()
+        .table("candidates")
+        .select("*")
+        .eq("id", candidate_id)
+        .single()
+        .execute()
+    )
+
+    if not candidate_res.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate not found"
+        )
+
+    candidate = candidate_res.data
+    existing = (
+    db._db()
+    .table("scheduled_interviews")
+    .select("*")
+    .eq("candidate_id", candidate_id)
+    .in_("status", ["scheduled", "launched"])
+    .execute()
+)
+
+    if existing.data:
+        raise HTTPException(
+            status_code=400,
+            detail="Interview already scheduled for this candidate"
+        ) 
+
+    job_res = (
+        db._db()
+        .table("job_openings")
+        .select("*")
+        .eq("id", candidate["job_opening_id"])
+        .single()
+        .execute()
+    )
+
+    if not job_res.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Job opening not found"
+        )
+
+    job = job_res.data
+
+    keys = auth.get_user_keys_decrypted(
+        auth.user_id_from(user)
+    )
+
+    analysis = extraction.analyze_documents(
+        job["jd_text"],
+        candidate["resume_text"],
+        candidate["role"],
+        keys=keys
+    )
+
+    questions = extraction.generate_question_plan(
+        analysis,
+        candidate["role"],
+        body.question_count,
+        keys=keys
+    )
+
+    session_id = db.create_session(
+        bot_id=None,
+        total_questions=len(questions),
+        candidate_name=candidate["name"],
+        candidate_email=candidate["email"],
+        role=candidate["role"],
+        status="scheduled",
+        organization_id=org_id
+    )
+
+    scheduled_for = (
+        datetime.now(timezone.utc)
+        + timedelta(minutes=body.delay_minutes)
+    )
+
+    db.update_session_analysis(
+        session_id,
+        analysis,
+        body.meeting_url,
+        scheduled_for.isoformat(),
+        job["jd_text"],
+        candidate["resume_text"]
+    )
+
+    db.save_questions(
+        session_id,
+        questions
+    )
+
+    db.create_scheduled_interview(
+        meeting_url=body.meeting_url,
+        scheduled_for_iso=scheduled_for.isoformat(),
+        candidate_email=candidate["email"],
+        candidate_name=candidate["name"],
+        role=candidate["role"],
+        session_id=session_id,
+        organization_id=org_id
+    )
+
+    when_human = scheduled_for.astimezone().strftime(
+        "%Y-%m-%d %H:%M %Z"
+    )
+
+    email_ok = scheduler.send_invite(
+        candidate["email"],
+        candidate["name"],
+        body.meeting_url,
+        role=candidate["role"],
+        when=when_human
+    )
+
+    return {
+        "status": "scheduled",
+        "session_id": session_id,
+        "email_sent": email_ok,
+        "questions_generated": len(questions)
+    }
+ 
+    
+@router.delete("/api/admin/organizations/{organization_id}")
+def delete_organization(
+    organization_id: str
+):
+
+    db._db().table("organization_users")\
+        .delete()\
+        .eq("organization_id", organization_id)\
+        .execute()
+
+    db._db().table("organizations")\
+        .delete()\
+        .eq("id", organization_id)\
+        .execute()
+
+    return {
+        "message": "Organization deleted"
+    }
+    
+    
+@router.get("/api/interviews")
+def list_interviews(
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    result = (
+        db._db()
+        .table("scheduled_interviews")
+        .select("*")
+        .eq("organization_id", org_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data
+
+
+
+
 
 
 # ─── US-AG-01: upload + parse JD/resume ───────────────────
@@ -89,10 +999,78 @@ async def analyse(resume: UploadFile = File(None), jd: UploadFile = File(None),
     return {"analysis": analysis, "tempFiles": temp}
 
 
+
+@router.post("/api/candidates/upload")
+async def upload_candidate_resume(
+    resume: UploadFile = File(...),
+    job_opening_id: str = Form(...),
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    job = (
+        db._db()
+        .table("job_openings")
+        .select("*")
+        .eq("id", job_opening_id)
+        .single()
+        .execute()
+    )
+
+    if not job.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Job opening not found"
+        )
+
+    job = job.data
+
+    rp = os.path.join(
+        UPLOAD_DIR,
+        f"{uuid.uuid4()}_{resume.filename}"
+    )
+
+    with open(rp, "wb") as f:
+        f.write(await resume.read())
+
+    resume_text = extraction.extract_text(rp)
+
+    keys = auth.get_user_keys_decrypted(
+        auth.user_id_from(user)
+    )
+
+    analysis = extraction.analyze_documents(
+        job["jd_text"],
+        resume_text,
+        job["title"],
+        keys=keys
+    )
+
+    candidate_name = analysis.get("candidateName") or "Unknown"
+    candidate_email = analysis.get("candidateEmail") or ""
+
+    db._db().table("candidates").insert({
+        "name": candidate_name,
+        "email": candidate_email,
+        "role": job["title"],
+        "resume_text": resume_text,
+        "job_opening_id": job_opening_id,
+        "organization_id": org_id
+    }).execute()
+
+    return {
+        "message": "Candidate created",
+        "name": candidate_name,
+        "email": candidate_email
+    }
 # ─── US-AG-02 + scheduling: generate questions, store, email, schedule bot ──
 @router.post("/api/schedule")
 async def schedule(request: Request, authorization: str = Header(None)):
-    user = _require_user(authorization)
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
     uid = auth.user_id_from(user)
     keys = auth.get_user_keys_decrypted(uid)
     body = await request.json()
@@ -118,9 +1096,14 @@ async def schedule(request: Request, authorization: str = Header(None)):
     # 2. create candidate + session in OUR Supabase, store analysis + questions
     candidate_name  = analysis.get("candidateName", "Candidate")
     session_id = db.create_session(
-        bot_id=None, total_questions=len(questions),
-        candidate_name=candidate_name, candidate_email=email, role=role,
-        status="scheduled")
+    bot_id=None,
+    total_questions=len(questions),
+    candidate_name=candidate_name,
+    candidate_email=email,
+    role=role,
+    status="scheduled",
+    organization_id=org_id
+)
 
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
     db.update_session_analysis(session_id, analysis, meeting_url, scheduled_for.isoformat(),
@@ -129,9 +1112,14 @@ async def schedule(request: Request, authorization: str = Header(None)):
 
     # 3. create the scheduled-interview row (the worker auto-deploys the bot at scheduled_for)
     sched = db.create_scheduled_interview(
-        meeting_url=meeting_url, scheduled_for_iso=scheduled_for.isoformat(),
-        candidate_email=email, candidate_name=candidate_name, role=role,
-        session_id=session_id)
+    meeting_url=meeting_url,
+    scheduled_for_iso=scheduled_for.isoformat(),
+    candidate_email=email,
+    candidate_name=candidate_name,
+    role=role,
+    session_id=session_id,
+    organization_id=org_id
+)
 
     # 4. email the invite now
     when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
@@ -144,9 +1132,14 @@ async def schedule(request: Request, authorization: str = Header(None)):
 
 # ─── HR dashboard reads ───────────────────────────────────
 @router.get("/api/hr/sessions")
-def hr_sessions(authorization: str = Header(None)):
-    _require_user(authorization)
-    return db.list_sessions_with_reports()
+def hr_sessions(
+    authorization: str = Header(None)
+):
+    user, ctx = _require_context(authorization)
+
+    org_id = ctx["organization_id"]
+
+    return db.list_sessions_with_reports(org_id)
 
 @router.get("/api/hr/session/{session_id}")
 def hr_session(session_id: str, authorization: str = Header(None)):

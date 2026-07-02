@@ -274,6 +274,18 @@ def wait_for_join_and_speak(sess: Session, intro: str):
     for i in range(150):
         time.sleep(2)
         status = get_bot_status(sess.bot_id)
+        if sess.session_id:
+            if status == "joining_call":
+                db.update_session_status(
+                    sess.session_id,
+                    "joining_call"
+                )
+
+            elif status == "in_waiting_room":
+                db.update_session_status(
+                    sess.session_id,
+                    "waiting_room"
+                )
         if i < 5 or i % 15 == 14:   # log first 5 + every 30s after
             print(f"   [{sess.bot_id[:8]}] [{i+1}/150] status = '{status}'")
         if status in ("in_call_recording", "in_call_not_recording"):
@@ -969,6 +981,11 @@ async def handle_transcription(request: Request, background_tasks: BackgroundTas
                 sess.session_id = db.create_session(bot_id, len(sess.questions))
             else:
                 db.mark_session_started(sess.session_id)
+
+                db.update_session_status(
+                    sess.session_id,
+                    "interviewing"
+                )
             threading.Thread(target=cap_watchdog, args=(sess,), daemon=True).start()
             threading.Thread(target=silence_end_watchdog, args=(sess,), daemon=True).start()
             first = sess.questions[0]

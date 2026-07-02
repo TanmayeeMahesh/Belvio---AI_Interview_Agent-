@@ -75,6 +75,9 @@ def verify_token(authorization: str):
         padded = parts[1] + '=' * (-len(parts[1]) % 4)
         payload = _json.loads(_b64.urlsafe_b64decode(padded))
         user_id = payload.get('sub') or payload.get('user_id')
+                
+        print("JWT USER ID =", user_id)
+        print("JWT EMAIL =", payload.get("email"))
         if not user_id:
             raise ValueError("No user ID in token")
         return {"id": user_id, "email": payload.get('email', '')}
@@ -86,6 +89,30 @@ def verify_token(authorization: str):
 
 def user_id_from(user) -> str:
     return getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
+
+
+def get_user_context(user_id: str):
+    db = _db()
+
+    if not db or not user_id:
+        return None
+
+    try:
+        res = (
+            db.table("organization_users")
+            .select("*")
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+
+        return res.data
+
+    except Exception as e:
+        print(f"❌ get_user_context failed: {e}")
+        return None
+
+
 
 
 # ─── API KEY STORAGE (encrypted, masked) ──────────────────
