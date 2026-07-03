@@ -80,6 +80,19 @@ function NarrativeSection({ title, text }) {
   )
 }
 
+function IntegrityBadge({ flag }) {
+  const styles = {
+    clean:       { bg: '#ecfdf5', color: '#059669', label: 'Clean' },
+    minor:       { bg: '#fffbeb', color: '#d97706', label: 'Minor flags' },
+    significant: { bg: '#fef2f2', color: '#dc2626', label: 'Significant flags' },
+  }
+  const s = styles[flag] || { bg: '#f3f4f6', color: '#6b7280', label: flag || '—' }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 999,
+                   fontWeight: 600, fontSize: 12, background: s.bg, color: s.color }}>{s.label}</span>
+  )
+}
+
 export default function Reports({ token, defaultSessionId }) {
   const [sessions, setSessions] = useState([])
   const [selectedId, setSelectedId] = useState('')
@@ -312,6 +325,39 @@ export default function Reports({ token, defaultSessionId }) {
           ) : (
             <div className="card" style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
               Recording is still processing — it can take a few minutes after the interview ends. Use ↻ to refresh.
+            </div>
+          )}
+
+          {/* Integrity (proctoring) */}
+          {fullData.integrity && (
+            <div className="card" style={{ padding: 20 }}>
+              <div className="flex-between" style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 600 }}>Integrity Review</div>
+                {fullData.integrity.assessed && <IntegrityBadge flag={fullData.integrity.integrity_flag} />}
+              </div>
+              {!fullData.integrity.assessed ? (
+                <div className="text-secondary text-sm">
+                  Not assessed{fullData.integrity.note ? ` — ${fullData.integrity.note}` : ''}.
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm" style={{ marginBottom: 10 }}>{fullData.integrity.summary}</div>
+                  {(fullData.integrity.transcript_authenticity?.flagged_answers || []).length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div className="text-xs text-secondary" style={{ marginBottom: 4 }}>Possibly AI-assisted answers</div>
+                      {fullData.integrity.transcript_authenticity.flagged_answers.map((f, i) => (
+                        <div key={i} className="text-sm" style={{ marginBottom: 4 }}>
+                          <span className="font-semibold">{f.topic}:</span>{' '}
+                          <span className="text-secondary">{f.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-xs text-secondary" style={{ fontStyle: 'italic', marginTop: 6 }}>
+                    AI-generated signals for human review — not proof. Verify before acting.
+                  </div>
+                </>
+              )}
             </div>
           )}
 

@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 import db          # Supabase persistence (fail-safe)
 import evaluator   # final scoring + report (US-AG-07/08)
 import scheduler   # email invite + (optional) meeting creation
+import proctor     # post-interview integrity analysis (fail-safe, background)
 
 load_dotenv()
 app = FastAPI(title="AI Interview Bot")
@@ -41,6 +42,9 @@ TTS_PROVIDER   = os.getenv("TTS_PROVIDER", "sarvam" if SARVAM_API_KEY else "gtts
 SARVAM_MODEL   = os.getenv("SARVAM_MODEL", "bulbul:v2")    # documented; v2 default speaker = anushka
 SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "anushka")
 SARVAM_LANG    = os.getenv("SARVAM_LANG", "en-IN")
+
+# ─── Proctoring (post-interview integrity). Instant off-switch: PROCTORING_ENABLED=false ──
+PROCTORING_ENABLED = os.getenv("PROCTORING_ENABLED", "true").lower() == "true"
 
 BOT_NAME    = "AI Interviewer (Sandbox)"
 RECALL_BASE = f"https://{os.getenv('RECALL_REGION', 'ap-northeast-1')}.recall.ai/api/v1"
@@ -344,6 +348,8 @@ def end_session(sess: Session, closing_text: str):
         threading.Thread(target=evaluator.evaluate_session,
                          args=(sid, sess.completion_status), daemon=True).start()
         threading.Thread(target=fetch_and_save_recording, args=(sess.bot_id, sid), daemon=True).start()
+        if PROCTORING_ENABLED:
+            threading.Thread(target=proctor.analyze_session, args=(sid, sess.bot_id), daemon=True).start()
     # keep routing_key → session_id so recording.done (fires minutes later) can still find it
     if sess.routing_key and sid:
         COMPLETED[sess.routing_key] = sid
