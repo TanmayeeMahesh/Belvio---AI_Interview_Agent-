@@ -1,169 +1,315 @@
 import { useEffect, useState } from "react";
 import API from "../api";
 
-export default function JobDetails({ jobId }) {
+export default function JobDetails({ jobId, jobName, role }) {
   const [candidates, setCandidates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploadAnalysis, setUploadAnalysis] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [filter, setFilter] = useState("all");
   const [resume, setResume] = useState(null);
   const [scheduleData, setScheduleData] = useState({});
-  const [loadingCandidate, setLoadingCandidate] = useState({});
+  const [schedulingId, setSchedulingId] = useState(null);
+  const [stats, setStats] = useState(null);
+
+  const filteredCandidates = candidates.filter(c => filter === "all" ? true : c.is_scheduled);
 
   useEffect(() => {
-    loadCandidates();
+    if (jobId) {
+      loadData();
+    }
   }, [jobId]);
 
+  async function loadData() {
+    try {
+      setLoading(true);
+      const [candRes, statsRes] = await Promise.all([
+        API.get(`/api/job-openings/${jobId}/candidates`),
+        API.get(`/api/job-openings/${jobId}/stats`)
+      ]);
+      setCandidates(candRes.data);
+      setStats(statsRes.data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function createCandidate() {
+    if (!resume) return;
+    setUploading(true);
     try {
       const formData = new FormData();
-
       formData.append("resume", resume);
       formData.append("job_opening_id", jobId);
 
-      await API.post("/api/candidates/upload", formData, {
+      const { data } = await API.post("/api/candidates/upload", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
       });
 
-      alert("Candidate added successfully");
-
-      loadCandidates();
+      if (data.analysis) {
+        setUploadAnalysis(data.analysis);
+      }
+      
+      setResume(null);
+      loadData();
     } catch (err) {
       console.error(err);
+      alert("Failed to upload candidate");
+    } finally {
+      setUploading(false);
     }
   }
 
-  async function loadCandidates() {
+  async function scheduleInterview(cId) {
     try {
-      const { data } = await API.get(`/api/job-openings/${jobId}/candidates`);
+      setSchedulingId(cId);
+      const data = scheduleData[cId] || {};
+      const payload = {
+        meeting_url: data.meeting_url,
+        question_count: parseInt(data.question_count || "12"),
+        delay_minutes: parseInt(data.delay_minutes || "30")
+      };
 
-      setCandidates(data);
+      await API.post(`/api/candidate/${cId}/schedule`, payload);
+      
+      // Optimistically update the candidate in the local list so the UI changes instantly
+      setCandidates(prev => prev.map(c => 
+        c.id === cId ? { ...c, is_scheduled: true, scheduled_time: new Date(Date.now() + payload.delay_minutes * 60000).toISOString() } : c
+      ));
+
+      // Reload in the background to update aggregate stats
+      loadData(); 
     } catch (err) {
       console.error(err);
+      alert(err.response?.data?.detail || "Failed to schedule interview");
+    } finally {
+      setSchedulingId(null);
     }
   }
+
+  if (loading) return <div className="page">Loading Job Details...</div>;
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1>Job Candidates</h1>
-
-      <div style={{ marginBottom: 20 }}>
-        <h3>Add Candidate</h3>
-
-        <input
-          type="file"
-          accept=".pdf,.doc,.docx"
-          onChange={(e) => setResume(e.target.files[0])}
-        />
-
-        <button onClick={createCandidate}>Add Candidate</button>
+    <div className="page">
+      <div className="flex-between" style={{ marginBottom: 32 }}>
+        <h1 className="page-title" style={{ margin: 0 }}>
+          Job Details: <span style={{ color: "var(--primary)" }}>{jobName || "Loading..."}</span>
+        </h1>
       </div>
 
-      <table style={{ width: "100%" }}>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Action</th>
-          </tr>
-        </thead>
+      <div className="grid-4" style={{ marginBottom: 40 }}>
+        <div className="card stat-card" style={{ padding: 20, cursor: "pointer", border: filter === "all" ? "1px solid var(--primary)" : undefined }} onClick={() => setFilter("all")}>
+          <div className="text-secondary font-semibold" style={{ textTransform: "uppercase", fontSize: 11, letterSpacing: "0.05em" }}>Total Candidates</div>
+          <div className="stat-number mt-8">{stats?.total_candidates || 0}</div>
+        </div>
+        <div className="card stat-card" style={{ padding: 20, cursor: "pointer", border: filter === "scheduled" ? "1px solid var(--primary)" : undefined }} onClick={() => setFilter("scheduled")}>
+          <div className="text-secondary font-semibold" style={{ textTransform: "uppercase", fontSize: 11, letterSpacing: "0.05em" }}>Scheduled</div>
+          <div className="stat-number mt-8">{stats?.scheduled || 0}</div>
+        </div>
+        <div className="card stat-card" style={{ padding: 20 }}>
+          <div className="text-secondary font-semibold" style={{ textTransform: "uppercase", fontSize: 11, letterSpacing: "0.05em" }}>In Progress</div>
+          <div className="stat-number mt-8">{stats?.in_progress || 0}</div>
+        </div>
+        <div className="card stat-card" style={{ padding: 20 }}>
+          <div className="text-secondary font-semibold" style={{ textTransform: "uppercase", fontSize: 11, letterSpacing: "0.05em" }}>Completed</div>
+          <div className="stat-number mt-8">{stats?.completed || 0}</div>
+        </div>
+      </div>
 
-        <tbody>
-          {candidates.map((c) => (
-            <tr key={c.id}>
-              <td>{c.name}</td>
-              <td>{c.email}</td>
-              <td>{c.role}</td>
+      {role !== "ORG_ADMIN" && (
+        <div className="card" style={{ marginBottom: 32, padding: 24 }}>
+          <h3 style={{ margin: "0 0 16px 0" }}>Add Candidate</h3>
+          <div className="flex-row">
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={(e) => setResume(e.target.files[0])}
+              style={{ maxWidth: 300 }}
+            />
+            <button className="btn-secondary" onClick={createCandidate} disabled={!resume || uploading}>
+              {uploading ? "Analyzing..." : "Upload Resume"}
+            </button>
+          </div>
+        </div>
+      )}
 
-              <td>
-                <input
-                  placeholder="Meet Link"
-                  value={scheduleData[c.id]?.meeting_url || ""}
-                  onChange={(e) =>
-                    setScheduleData({
-                      ...scheduleData,
-                      [c.id]: {
-                        ...scheduleData[c.id],
-                        meeting_url: e.target.value,
-                      },
-                    })
-                  }
-                />
+      <div className="card">
+        <div style={{ padding: "24px 28px", borderBottom: "1px solid var(--border)" }}>
+          <h2 style={{ fontSize: 18, margin: 0 }}>Candidate Pipeline</h2>
+        </div>
+        <div style={{ padding: 0 }}>
+          {filteredCandidates.length === 0 ? (
+             <div style={{ padding: 32, textAlign: "center", color: "var(--text-secondary)" }}>
+               No candidates match the current filter.
+             </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Analysis</th>
+                  <th>{role === "ORG_ADMIN" ? "Status" : "Schedule Interview"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCandidates.map((c) => (
+                  <tr key={c.id}>
+                    <td className="font-semibold">{c.name}</td>
+                    <td className="text-secondary text-sm">{c.email}</td>
+                    <td><span className="badge badge-in_progress">{c.role}</span></td>
+                    <td>
+                      {c.analysis ? (
+                        <button className="btn-secondary btn-sm" onClick={() => setUploadAnalysis(c.analysis)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                          View Analysis
+                        </button>
+                      ) : (
+                        <span className="text-secondary text-sm">N/A</span>
+                      )}
+                    </td>
+                    <td>
+                      {c.is_scheduled ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--primary)" }}>Scheduled</span>
+                          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                            {c.scheduled_time ? new Date(c.scheduled_time).toLocaleString() : ""}
+                          </span>
+                        </div>
+                      ) : (
+                        role === "ORG_ADMIN" ? (
+                          <span className="badge badge-incomplete">Pending</span>
+                        ) : (
+                          <div className="flex-row" style={{ alignItems: "flex-end", gap: 16, opacity: schedulingId === c.id ? 0.6 : 1, pointerEvents: schedulingId === c.id ? "none" : "auto" }}>
+                            <div>
+                              <label style={{ fontSize: 11, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Meeting Link</label>
+                              <input
+                                placeholder="https://..."
+                                value={scheduleData[c.id]?.meeting_url || ""}
+                                onChange={(e) =>
+                                  setScheduleData({
+                                    ...scheduleData,
+                                    [c.id]: {
+                                      ...scheduleData[c.id],
+                                      meeting_url: e.target.value,
+                                    },
+                                  })
+                                }
+                                style={{ width: 160, padding: "6px 10px" }}
+                                disabled={schedulingId === c.id}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Questions</label>
+                              <input
+                                type="number"
+                                value={scheduleData[c.id]?.question_count || 12}
+                                onChange={(e) =>
+                                  setScheduleData({
+                                    ...scheduleData,
+                                    [c.id]: {
+                                      ...scheduleData[c.id],
+                                      question_count: e.target.value,
+                                    },
+                                  })
+                                }
+                                style={{ width: 70, padding: "6px 10px" }}
+                                disabled={schedulingId === c.id}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Delay (mins)</label>
+                              <input
+                                type="number"
+                                value={scheduleData[c.id]?.delay_minutes || 30}
+                                onChange={(e) =>
+                                  setScheduleData({
+                                    ...scheduleData,
+                                    [c.id]: {
+                                      ...scheduleData[c.id],
+                                      delay_minutes: e.target.value,
+                                    },
+                                  })
+                                }
+                                style={{ width: 70, padding: "6px 10px" }}
+                                disabled={schedulingId === c.id}
+                              />
+                            </div>
+                            <button className="btn-primary btn-sm" onClick={() => scheduleInterview(c.id)} style={{ padding: "6px 16px" }} disabled={schedulingId === c.id || !scheduleData[c.id]?.meeting_url}>
+                              {schedulingId === c.id ? "Scheduling..." : "Schedule"}
+                            </button>
+                          </div>
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
 
-                <input
-                  type="number"
-                  placeholder="Questions"
-                  value={scheduleData[c.id]?.question_count || 12}
-                  onChange={(e) =>
-                    setScheduleData({
-                      ...scheduleData,
-                      [c.id]: {
-                        ...scheduleData[c.id],
-                        question_count: Number(e.target.value),
-                      },
-                    })
-                  }
-                />
+      {uploadAnalysis && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999
+        }}>
+          <div className="card" style={{ width: "90%", maxWidth: 600, maxHeight: "90vh", overflowY: "auto", padding: 32 }}>
+            <h2 style={{ margin: "0 0 8px 0" }}>Gap Analysis</h2>
+            <p className="text-secondary" style={{ marginBottom: 24 }}>AI-generated fit assessment based on the job description.</p>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+              <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 4 }}>Candidate Name & Email</div>
+                <div style={{ fontSize: 16, fontWeight: "bold" }}>{uploadAnalysis.candidateName || "Unknown"}</div>
+                <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{uploadAnalysis.candidateEmail || "No Email"}</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 4 }}>Match Score</div>
+                <div style={{ fontSize: 24, fontWeight: "bold", color: "var(--primary)" }}>{uploadAnalysis.jdMatchScore || 0}/100</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 4 }}>Role</div>
+                <div style={{ fontSize: 16, fontWeight: "500" }}>{uploadAnalysis.jobRole || "—"}</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 4 }}>Experience Level</div>
+                <div style={{ fontSize: 16, fontWeight: "500", textTransform: "capitalize" }}>{uploadAnalysis.detectedLevel || "—"}</div>
+                {uploadAnalysis.levelReason && <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{uploadAnalysis.levelReason}</div>}
+              </div>
+            </div>
 
-                <input
-                  type="number"
-                  placeholder="Delay"
-                  value={scheduleData[c.id]?.delay_minutes || 30}
-                  onChange={(e) =>
-                    setScheduleData({
-                      ...scheduleData,
-                      [c.id]: {
-                        ...scheduleData[c.id],
-                        delay_minutes: Number(e.target.value),
-                      },
-                    })
-                  }
-                />
+            <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8, marginBottom: 24 }}>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 8 }}>One-Line Summary</div>
+              <div style={{ fontSize: 15, lineHeight: 1.5 }}>{uploadAnalysis.analysisSummary || "—"}</div>
+            </div>
 
-                <button
-                  disabled={loadingCandidate[c.id]}
-                  onClick={async () => {
-                    try {
-                      setLoadingCandidate({
-                        ...loadingCandidate,
-                        [c.id]: true,
-                      });
-                      console.log(scheduleData);
-                      console.log(scheduleData[c.id]);
-                      if (!scheduleData[c.id]?.meeting_url) {
-                        alert("Please enter meeting link");
-                        return;
-                      }
-                      await API.post(`/api/candidate/${c.id}/schedule`, {
-                        meeting_url: scheduleData[c.id]?.meeting_url || "",
-                        question_count:
-                          scheduleData[c.id]?.question_count || 12,
-                        delay_minutes: scheduleData[c.id]?.delay_minutes || 30,
-                      });
+            <h3 style={{ fontSize: 14, margin: "0 0 12px 0", color: "var(--text-secondary)", textTransform: "uppercase" }}>Strengths / Skills Detected</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 24 }}>
+              {uploadAnalysis.skills?.map((s, i) => (
+                <span key={i} className="badge badge-completed">{s}</span>
+              ))}
+            </div>
 
-                      alert("Interview Scheduled Successfully");
-                      loadCandidates();
-                    } catch (err) {
-                      console.error(err);
+            <h3 style={{ fontSize: 14, margin: "0 0 12px 0", color: "var(--text-secondary)", textTransform: "uppercase" }}>Missing Skills / Gaps</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 32 }}>
+              {uploadAnalysis.missingSkills?.length > 0 ? uploadAnalysis.missingSkills.map((s, i) => (
+                <span key={i} className="badge badge-in_progress">{s}</span>
+              )) : <span className="text-secondary" style={{ fontSize: 14 }}>No significant gaps found.</span>}
+            </div>
 
-                      alert(err.response?.data?.detail || "Scheduling Failed");
-                    } finally {
-                      setLoadingCandidate({
-                        ...loadingCandidate,
-                        [c.id]: false,
-                      });
-                    }
-                  }}
-                >
-                  {loadingCandidate[c.id]
-                    ? "Scheduling..."
-                    : "Schedule Interview"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            <button className="btn-primary" onClick={() => setUploadAnalysis(null)} style={{ width: "100%", justifyContent: "center" }}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

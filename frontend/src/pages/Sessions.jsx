@@ -223,12 +223,20 @@ export default function Sessions({ token, onViewReport }) {
     return true;
   });
 
-  function formatDate(iso) {
+  function formatDateIST(iso) {
     if (!iso) return "—";
-    return new Date(iso).toLocaleString([], {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
+    try {
+      return new Date(iso).toLocaleString("en-US", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      }) + " IST";
+    } catch(e) {
+      return new Date(iso).toLocaleString([], {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+    }
   }
 
   return (
@@ -330,14 +338,22 @@ export default function Sessions({ token, onViewReport }) {
               <tr>
                 <th>Candidate</th>
                 <th>Role</th>
+                <th>Level</th>
+                <th>Scheduled Time IST</th>
                 <th>Status</th>
+                <th>Meeting Link</th>
                 <th>Result</th>
-                <th>Scheduled At</th>
-                <th></th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s) => (
+              {filtered.map((s) => {
+                let level = "—";
+                if (s.analysis && s.analysis.detectedLevel) {
+                  level = s.analysis.detectedLevel.charAt(0).toUpperCase() + s.analysis.detectedLevel.slice(1);
+                }
+                
+                return (
                 <tr key={s.id}>
                   <td>
                     <div className="font-semibold">
@@ -350,8 +366,19 @@ export default function Sessions({ token, onViewReport }) {
                     )}
                   </td>
                   <td className="text-secondary">{s.role || "—"}</td>
+                  <td className="text-secondary">{level}</td>
+                  <td className="text-secondary text-sm">
+                    {formatDateIST(s.scheduled_at || s.created_at)}
+                  </td>
                   <td>
                     <StatusBadge status={s.status} />
+                  </td>
+                  <td>
+                    {s.meeting_url ? (
+                      <a href={s.meeting_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", textDecoration: "underline", fontSize: 13 }}>Link</a>
+                    ) : (
+                      <span className="text-secondary text-sm">—</span>
+                    )}
                   </td>
                   <td>
                     {s.recommendation ? (
@@ -363,9 +390,6 @@ export default function Sessions({ token, onViewReport }) {
                     ) : (
                       <span className="text-secondary">—</span>
                     )}
-                  </td>
-                  <td className="text-secondary text-sm">
-                    {formatDate(s.scheduled_at || s.created_at)}
                   </td>
                   <td>
                     <div
@@ -401,7 +425,8 @@ export default function Sessions({ token, onViewReport }) {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

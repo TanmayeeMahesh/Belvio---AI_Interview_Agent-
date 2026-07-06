@@ -62,7 +62,7 @@ Return EXACTLY this JSON (no deviations):
   "technicalStack": ["..."],
   "missingSkills": ["skills in the JD weak/absent in the resume"],
   "jdMatchScore": 0,
-  "analysisSummary": "2-3 sentence briefing for the interviewer agent"
+  "analysisSummary": "One-line summary of resume and JD gap"
 }}"""
     result = llm_stack.call_json(system, user, job="parsing", max_tokens=1200, keys=keys)
     if not result:

@@ -27,24 +27,41 @@ GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
 
-def _build_body(candidate_name, role, meeting_url, when):
+def _build_body(candidate_name, role, meeting_url, when, organization_name):
     name      = candidate_name or "Candidate"
     role_line = f" for the {role} position" if role else ""
+    org_line  = f" at {organization_name}" if organization_name else ""
     when_line = f"\n\nScheduled time: {when}" if when else ""
+    
+    sender_name = organization_name if organization_name else "Recruitment Team"
+    
     return (
         f"Hello {name},\n\n"
-        f"You're invited to an AI-conducted technical interview{role_line}. "
+        f"You're invited to an AI-conducted technical interview{role_line}{org_line}. "
         f"The session is conducted by an AI interviewer and will be recorded (audio and video) "
         f"and transcribed for evaluation.{when_line}\n\n"
         f"Join using this link at your scheduled time:\n{meeting_url}\n\n"
         f"Please join from a quiet space with a working microphone. When the AI interviewer asks "
         f"for your consent at the start, please respond verbally to begin.\n\n"
-        f"Best regards,\nRecruitment Team"
+        f"Best regards,\n{sender_name}"
     )
+
+def _build_custom_body(template, candidate_name, role, meeting_url, when, organization_name):
+    name = candidate_name or "Candidate"
+    role_str = role or ""
+    when_str = when or ""
+    org_str = organization_name or ""
+    
+    body = template.replace("{candidate_name}", name)
+    body = body.replace("{role}", role_str)
+    body = body.replace("{meeting_url}", meeting_url)
+    body = body.replace("{when}", when_str)
+    body = body.replace("{organization_name}", org_str)
+    return body
 
 
 def send_invite(to_email: str, candidate_name: str, meeting_url: str,
-                role: str = None, when: str = None) -> bool:
+                role: str = None, when: str = None, custom_template: str = None, organization_name: str = None) -> bool:
     """
     Email the interview invite to the candidate.
     Tries SendGrid HTTP API first, falls back to Gmail SMTP.
@@ -56,7 +73,10 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
 
     role_line = f" for the {role} position" if role else ""
     subject   = f"Your Interview Invitation{role_line}"
-    body      = _build_body(candidate_name, role, meeting_url, when)
+    if custom_template and custom_template.strip():
+        body = _build_custom_body(custom_template, candidate_name, role, meeting_url, when, organization_name)
+    else:
+        body = _build_body(candidate_name, role, meeting_url, when, organization_name)
 
     # ── Method 1: SendGrid HTTP API (works in cloud, no domain needed) ──
     if SENDGRID_API_KEY:
@@ -108,11 +128,61 @@ def send_invite(to_email: str, candidate_name: str, meeting_url: str,
                 server.ehlo(); server.starttls(context=ctx); server.ehlo()
                 server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
                 server.send_message(msg)
-        print(f"[EMAIL] Invite sent via Gmail SMTP to {to_email}")
+        print(f"[EMAIL] Invite sent via Gmail to {to_email}")
         return True
     except Exception as e:
-        print(f"[ERROR] send_invite failed: {e}")
+        print(f"[ERROR] Gmail SMTP failed: {e}")
         return False
+
+def send_hr_invite(to_email: str, role: str) -> bool:
+    """Email an invitation to a newly created HR or Org Admin."""
+    if not to_email:
+        return False
+
+    subject = f"Invitation to join Belvio as {role}"
+    body = (
+        f"Hello,\n\n"
+        f"You have been invited to join Belvio as a {role}.\n"
+        f"Please navigate to the Belvio portal and sign in with this email address to get started.\n\n"
+        f"Best regards,\nBelvio Administration"
+    )
+
+    if SENDGRID_API_KEY:
+        try:
+            resp = _http.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": to_email}]}],
+                    "from": {"email": SENDGRID_FROM_EMAIL or GMAIL_ADDRESS},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}],
+                },
+                timeout=15,
+            )
+            if resp.status_code == 202:
+                print(f"[EMAIL] HR Invite sent via SendGrid to {to_email}")
+                return True
+        except Exception:
+            pass
+
+    if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = GMAIL_ADDRESS
+        msg["To"] = to_email
+        msg.set_content(body)
+        try:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as server:
+                server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                server.send_message(msg)
+            print(f"[EMAIL] HR Invite sent via Gmail to {to_email}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Gmail HR invite failed: {e}")
+
+    return False
 
 
 # ─── GOOGLE MEET CREATION (gated on OAuth setup) ────────────────────────

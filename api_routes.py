@@ -56,8 +56,11 @@ class CompleteRegistrationRequest(BaseModel):
 class CreateJobOpeningRequest(BaseModel):
     title: str
     description: str
-    jd_text: str 
+    when: str
     
+
+class SettingsRequest(BaseModel):
+    email_template: str = None
  
 class CreateCandidateRequest(BaseModel):
     name: str
@@ -113,7 +116,28 @@ def list_candidates(
         .execute()
     )
 
-    return result.data
+    candidates = result.data
+
+    if candidates:
+        cand_ids = [c["id"] for c in candidates]
+        ints = (
+            db._db()
+            .table("scheduled_interviews")
+            .select("*")
+            .in_("candidate_id", cand_ids)
+            .execute()
+        )
+        sched_map = {i["candidate_id"]: i for i in ints.data}
+
+        for c in candidates:
+            if c["id"] in sched_map:
+                c["is_scheduled"] = True
+                c["scheduled_time"] = sched_map[c["id"]].get("scheduled_for")
+            else:
+                c["is_scheduled"] = False
+                c["scheduled_time"] = None
+
+    return candidates
 
 
 @router.get("/api/job-openings/{job_id}/candidates")
@@ -127,7 +151,28 @@ def candidates_for_job(job_id: str):
         .execute()
     )
 
-    return result.data
+    candidates = result.data
+
+    if candidates:
+        cand_ids = [c["id"] for c in candidates]
+        ints = (
+            db._db()
+            .table("scheduled_interviews")
+            .select("*")
+            .in_("candidate_id", cand_ids)
+            .execute()
+        )
+        sched_map = {i["candidate_id"]: i for i in ints.data}
+
+        for c in candidates:
+            if c["id"] in sched_map:
+                c["is_scheduled"] = True
+                c["scheduled_time"] = sched_map[c["id"]].get("scheduled_for")
+            else:
+                c["is_scheduled"] = False
+                c["scheduled_time"] = None
+
+    return candidates
 
 
 @router.get("/api/dashboard/org-admin")
@@ -342,6 +387,8 @@ async def complete_registration(
  
 class CreateHRRequest(BaseModel):
     email: str
+    name: str = None
+    role: str = "HR"
 
 
 
@@ -386,6 +433,9 @@ async def create_hr(
         )
 
     email = body.email.strip().lower()
+    role = body.role.strip().upper() if body.role else "HR"
+    if role not in ["HR", "ORG_ADMIN", "RECRUITER", "INTERVIEWER"]:
+        role = "HR"
 
     existing = (
         db._db()
@@ -407,7 +457,8 @@ async def create_hr(
         .insert({
             "organization_id": ctx["organization_id"],
             "email": email,
-            "role": "HR",
+            "name": body.name,
+            "role": role,
             "status": "PENDING"
         })
         .execute()
@@ -576,10 +627,17 @@ def whoami(
 
     user, ctx = _require_context(authorization)
 
+    org_name = None
+    if ctx["organization_id"]:
+        org_res = db._db().table("organizations").select("name").eq("id", ctx["organization_id"]).execute()
+        if org_res.data:
+            org_name = org_res.data[0]["name"]
+
     return {
         "email": user["email"],
         "role": ctx["role"],
-        "organization_id": ctx["organization_id"]
+        "organization_id": ctx["organization_id"],
+        "organization_name": org_name
     }
 
 @router.get("/api/debug-header")
@@ -749,6 +807,21 @@ def list_all_users():
     return result.data
 
 
+@router.get("/api/org-admin/settings")
+def get_org_settings(authorization: str = Header(None)):
+    user, ctx = _require_context(authorization)
+    org = db._db().table("organizations").select("email_template").eq("id", ctx["organization_id"]).execute()
+    return {"email_template": org.data[0].get("email_template") if org.data else None}
+
+@router.put("/api/org-admin/settings")
+def update_org_settings(body: SettingsRequest, authorization: str = Header(None)):
+    user, ctx = _require_context(authorization)
+    if ctx["role"] != "ORG_ADMIN":
+        raise HTTPException(status_code=403, detail="Only ORG_ADMIN can update settings")
+    db._db().table("organizations").update({"email_template": body.email_template}).eq("id", ctx["organization_id"]).execute()
+    return {"message": "Settings updated"}
+
+
 @router.get("/api/org-admin/hrs")
 def list_hrs(
     authorization: str = Header(None)
@@ -897,19 +970,26 @@ def schedule_candidate(
         candidate_name=candidate["name"],
         role=candidate["role"],
         session_id=session_id,
-        organization_id=org_id
+        organization_id=org_id,
+        candidate_id=candidate_id
     )
 
     when_human = scheduled_for.astimezone().strftime(
         "%Y-%m-%d %H:%M %Z"
     )
 
+    org = db._db().table("organizations").select("name, email_template").eq("id", org_id).execute()
+    custom_template = org.data[0].get("email_template") if org.data else None
+    org_name = org.data[0].get("name") if org.data else None
+
     email_ok = scheduler.send_invite(
         candidate["email"],
         candidate["name"],
         body.meeting_url,
         role=candidate["role"],
-        when=when_human
+        when=when_human,
+        custom_template=custom_template,
+        organization_name=org_name
     )
 
     return {
@@ -1057,13 +1137,15 @@ async def upload_candidate_resume(
         "role": job["title"],
         "resume_text": resume_text,
         "job_opening_id": job_opening_id,
-        "organization_id": org_id
+        "organization_id": org_id,
+        "analysis": analysis
     }).execute()
 
     return {
         "message": "Candidate created",
         "name": candidate_name,
-        "email": candidate_email
+        "email": candidate_email,
+        "analysis": analysis
     }
 # ─── US-AG-02 + scheduling: generate questions, store, email, schedule bot ──
 @router.post("/api/schedule")
@@ -1123,7 +1205,16 @@ async def schedule(request: Request, authorization: str = Header(None)):
 
     # 4. email the invite now
     when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    email_ok = scheduler.send_invite(email, candidate_name, meeting_url, role=role, when=when_human) if email else False
+    
+    org_id = analysis.get("organization_id")
+    custom_template = None
+    org_name = None
+    if org_id:
+        org = db._db().table("organizations").select("name, email_template").eq("id", org_id).execute()
+        custom_template = org.data[0].get("email_template") if org.data else None
+        org_name = org.data[0].get("name") if org.data else None
+
+    email_ok = scheduler.send_invite(email, candidate_name, meeting_url, role=role, when=when_human, custom_template=custom_template, organization_name=org_name) if email else False
 
     return {"status": "scheduled", "session_id": session_id,
             "scheduled_at": scheduled_for.isoformat().replace("+00:00", ""),
@@ -1197,3 +1288,47 @@ async def set_keys(request: Request, authorization: str = Header(None)):
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to save keys")
     return {"status": "saved", "keys": auth.get_user_keys_masked(auth.user_id_from(user))}
+
+@router.get("/api/dashboard/hr")
+def hr_dashboard(authorization: str = Header(None)):
+    user, ctx = _require_context(authorization)
+    org_id = ctx["organization_id"]
+    
+    candidates = db._db().table("candidates").select("*", count="exact").eq("organization_id", org_id).execute()
+    interviews = db._db().table("scheduled_interviews").select("*", count="exact").eq("organization_id", org_id).execute()
+    jobs = db._db().table("job_openings").select("*", count="exact").eq("organization_id", org_id).execute()
+    
+    return {
+        "total_candidates": candidates.count,
+        "total_interviews": interviews.count,
+        "total_jobs": jobs.count
+    }
+
+@router.get("/api/job-openings/{job_id}/stats")
+def job_stats(job_id: str, authorization: str = Header(None)):
+    user, ctx = _require_context(authorization)
+    
+    cands = db._db().table("candidates").select("*", count="exact").eq("job_opening_id", job_id).execute()
+    candidate_data = cands.data
+    cand_ids = [c["id"] for c in candidate_data]
+    
+    if not cand_ids:
+        return {
+            "total_candidates": 0,
+            "scheduled": 0,
+            "completed": 0,
+            "in_progress": 0
+        }
+        
+    ints = db._db().table("scheduled_interviews").select("*").in_("candidate_id", cand_ids).execute()
+    
+    scheduled = len([i for i in ints.data if i.get("status") == "scheduled"])
+    completed = len([i for i in ints.data if i.get("status") == "completed"])
+    in_progress = len([i for i in ints.data if i.get("status") == "in_progress"])
+    
+    return {
+        "total_candidates": cands.count,
+        "scheduled": scheduled,
+        "completed": completed,
+        "in_progress": in_progress
+    }

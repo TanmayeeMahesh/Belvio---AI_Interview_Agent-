@@ -263,7 +263,8 @@ def create_scheduled_interview(
     candidate_name: str = None,
     role: str = None,
     session_id: str = None,
-    organization_id: str = None
+    organization_id: str = None,
+    candidate_id: str = None
 ) -> dict | None:
     """Insert a scheduled-interview row. Returns the row (with id) or None."""
     def op(db):
@@ -275,7 +276,8 @@ def create_scheduled_interview(
     "role": role,
     "status": "scheduled",
     "session_id": session_id,
-    "organization_id": organization_id
+    "organization_id": organization_id,
+    "candidate_id": candidate_id
 }).execute()
         row = res.data[0]
         print(f"[DB]  scheduled interview {row['id']} for {scheduled_for_iso}")
