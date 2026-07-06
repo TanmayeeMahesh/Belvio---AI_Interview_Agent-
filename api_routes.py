@@ -885,19 +885,18 @@ def schedule_candidate(
 
     candidate = candidate_res.data
     existing = (
-    db._db()
-    .table("scheduled_interviews")
-    .select("*")
-    .eq("candidate_id", candidate_id)
-    .in_("status", ["scheduled", "launched"])
-    .execute()
-)
+        db._db()
+        .table("scheduled_interviews")
+        .select("*")
+        .eq("candidate_id", candidate_id)
+        .execute()
+    )
 
     if existing.data:
         raise HTTPException(
             status_code=400,
-            detail="Interview already scheduled for this candidate"
-        ) 
+            detail="This candidate has already been interviewed. A candidate can only have one interview."
+        )
 
     job_res = (
         db._db()

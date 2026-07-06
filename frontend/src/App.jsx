@@ -1,33 +1,30 @@
 import { useState, useEffect } from "react";
-import API, { setAuthToken } from "./api";
-import Dashboard from "./pages/Dashboard";
-import Sessions from "./pages/Sessions";
-import Reports from "./pages/Reports";
+import Login from "./pages/Login";
+import LandingPage from "./pages/LandingPage";
 import SuperAdminDashboard from "./pages/SuperAdminDashboard";
-import OrgAdminDashboard from "./pages/OrgAdminDashboard";
 import CreateOrganization from "./pages/CreateOrganization";
-import SuperAdminProfile from "./pages/SuperAdminProfile";
+import UserProfile from "./pages/UserProfile";
+import OrgAdminDashboard from "./pages/OrgAdminDashboard";
 import HRDashboard from "./pages/HRDashboard";
-import JobOpenings from "./pages/JobOpenings";
 import HRManagement from "./pages/HRManagement";
+import JobOpenings from "./pages/JobOpenings";
+import JobDetails from "./pages/JobDetails";
 import Candidates from "./pages/Candidates";
 import Interviews from "./pages/Interviews";
-import JobDetails from "./pages/JobDetails";
-import Login from "./pages/Login";
+import Reports from "./pages/Reports";
 import OrgSettings from "./pages/OrgSettings";
-import LandingPage from "./pages/LandingPage";
+import API, { setAuthToken } from "./api";
 
 const TOKEN_KEY = "ib_token";
 const EMAIL_KEY = "ib_email";
 
-function Nav({ tab, setTab, email, onLogout, role, orgName }) {
+function Nav({ tab, setTab, email, role, orgName, onLogout }) {
   let tabs = [];
 
   if (role === "SUPER_ADMIN") {
     tabs = [
       { id: "dashboard", label: "Dashboard" },
       { id: "create-org", label: "Create Organization" },
-      { id: "profile", label: "Profile" },
     ];
   }
 
@@ -98,46 +95,79 @@ function Nav({ tab, setTab, email, onLogout, role, orgName }) {
           </div>
         </div>
         
-        <div className="profile-menu" style={{ position: "relative", display: "inline-block" }}>
-          <button className="btn-ghost flex-row" style={{ padding: "8px 18px 8px 10px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--surface)" }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold", fontSize: 16 }}>
-              {email?.[0]?.toUpperCase() || "U"}
-            </div>
-            <span style={{ fontWeight: 700, fontSize: 15, marginLeft: 4 }}>
-              {orgName || role?.replace("_", " ")}
-            </span>
-            <span style={{ fontSize: 11, marginLeft: 6, color: "var(--text-secondary)" }}>▼</span>
-          </button>
-
-          <div className="profile-dropdown" style={{
-             position: "absolute",
-             top: "100%", right: 0,
-             marginTop: 8,
-             background: "var(--surface)",
-             border: "1px solid var(--border)",
-             borderRadius: 12,
-             boxShadow: "var(--shadow)",
-             padding: "16px",
-             minWidth: 200,
-             flexDirection: "column",
-             gap: 12,
-             zIndex: 100
-          }}>
-             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-               <span style={{ fontSize: 14, fontWeight: 600 }}>{email}</span>
-               <span style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: 500 }}>{role?.replace("_", " ")}</span>
-               {orgName && <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{orgName}</span>}
-             </div>
-             <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "4px 0" }} />
-             {role === "ORG_ADMIN" && (
-               <button className="btn-secondary btn-sm" onClick={() => setTab("settings")} style={{ width: "100%", marginBottom: "4px" }}>
-                 Settings
-               </button>
-             )}
-             <button className="btn-secondary btn-sm" onClick={onLogout} style={{ width: "100%" }}>
-               Sign out
-             </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          {/* Action Buttons (Settings, Profile) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, borderRight: "1px solid var(--border)", paddingRight: 24 }}>
+            {role === "ORG_ADMIN" && (
+              <button 
+                onClick={() => setTab("settings")}
+                style={{
+                  background: tab === "settings" ? "rgba(0,0,0,0.05)" : "transparent",
+                  border: "1px solid transparent",
+                  borderRadius: 8,
+                  padding: "8px 16px",
+                  cursor: "pointer",
+                  color: "var(--text)",
+                  fontWeight: 600,
+                  fontSize: 14,
+                  transition: "all 0.2s"
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.05)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = tab === "settings" ? "rgba(0,0,0,0.05)" : "transparent"; }}
+              >
+                Settings
+              </button>
+            )}
+            <button 
+              onClick={() => setTab("profile")}
+              style={{
+                background: tab === "profile" ? "rgba(0,0,0,0.05)" : "transparent",
+                border: "1px solid transparent",
+                borderRadius: 8,
+                padding: "8px 16px",
+                cursor: "pointer",
+                color: "var(--text)",
+                fontWeight: 600,
+                fontSize: 14,
+                transition: "all 0.2s"
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.05)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = tab === "profile" ? "rgba(0,0,0,0.05)" : "transparent"; }}
+            >
+              My Profile
+            </button>
           </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 16 }}>
+              {email ? email.charAt(0).toUpperCase() : "U"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>{email}</span>
+              <span style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>
+                {orgName ? `${orgName} • ${role?.replace("_", " ")}` : role?.replace("_", " ")}
+              </span>
+            </div>
+          </div>
+          
+          <button 
+            onClick={onLogout}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "8px 16px",
+              cursor: "pointer",
+              color: "var(--danger)",
+              fontWeight: 600,
+              fontSize: 14,
+              transition: "all 0.2s"
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--danger)"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "var(--danger)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--danger)"; e.currentTarget.style.borderColor = "var(--border)"; }}
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </nav>
@@ -151,29 +181,36 @@ export default function App() {
   const [email, setEmail] = useState(
     () => localStorage.getItem(EMAIL_KEY) || "",
   );
-  const [role, setRole] = useState("");
+  const [role, setRole] = useState(null);
   const [orgName, setOrgName] = useState("");
-  const [loadingUser, setLoadingUser] = useState(true);
   const [tab, setTab] = useState("dashboard");
-  const [reportSessionId, setReportSessionId] = useState(null);
-  const [selectedJobId, setSelectedJobId] = useState(null);
-  const [selectedJobName, setSelectedJobName] = useState("");
+  const [loadingUser, setLoadingUser] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
 
-  function openJob(jobId, jobName) {
-    setSelectedJobId(jobId);
-    setSelectedJobName(jobName);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedJobName, setSelectedJobName] = useState("");
+  const [reportSessionId, setReportSessionId] = useState(null);
+
+  const openJob = (id, name) => {
+    setSelectedJobId(id);
+    setSelectedJobName(name);
     setTab("job-details");
-  }
+  };
+
+  const openReport = (sessionId) => {
+    setReportSessionId(sessionId);
+    setTab("reports");
+  };
 
   useEffect(() => {
-    if (!token) {
-      setLoadingUser(false);
-      return;
+    if (token) {
+      setAuthToken(token);
     }
+  }, [token]);
 
-    setAuthToken(token);
-
+  useEffect(() => {
+    if (!token) return;
+    setLoadingUser(true);
     API.get("/api/whoami")
       .then((res) => {
         setRole(res.data.role);
@@ -193,6 +230,7 @@ export default function App() {
     setToken(tok);
     setEmail(em);
     setAuthToken(tok);
+    window.location.reload();
   }
 
   function handleLogout() {
@@ -201,17 +239,13 @@ export default function App() {
     setToken("");
     setEmail("");
     setAuthToken(null);
-  }
-
-  function openReport(sessionId) {
-    setReportSessionId(sessionId);
-    setTab("reports");
+    window.location.reload();
   }
 
   if (loadingUser) {
     return (
       <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center" }}>
-        Loading Belvio...
+        Loading...
       </div>
     );
   }
@@ -235,11 +269,12 @@ export default function App() {
       />
       
       <main style={{ flex: 1 }}>
+        {tab === "profile" && <UserProfile role={role} initialEmail={email} />}
+        
         {tab === "dashboard" && role === "SUPER_ADMIN" && <SuperAdminDashboard />}
         {tab === "create-org" && role === "SUPER_ADMIN" && <CreateOrganization />}
-        {tab === "profile" && role === "SUPER_ADMIN" && <SuperAdminProfile />}
         
-        {tab === "dashboard" && role === "ORG_ADMIN" && <OrgAdminDashboard onNavigate={setTab} />}
+        {tab === "dashboard" && role === "ORG_ADMIN" && <OrgAdminDashboard onNavigate={setTab} onOpenJob={openJob} />}
         {tab === "settings" && role === "ORG_ADMIN" && <OrgSettings />}
 
         {tab === "dashboard" && role === "HR" && <HRDashboard onOpenJob={openJob} />}
@@ -249,12 +284,7 @@ export default function App() {
         {tab === "interviews" && <Interviews onViewReport={openReport} />}
         {tab === "job-details" && <JobDetails jobId={selectedJobId} jobName={selectedJobName} role={role} />}
         
-        {tab === "sessions" && (
-          <Sessions token={token} onViewReport={openReport} />
-        )}
-        {tab === "reports" && (
-          <Reports token={token} defaultSessionId={reportSessionId} />
-        )}
+        {tab === "reports" && <Reports token={token} defaultSessionId={reportSessionId} />}
       </main>
 
       <footer style={{ textAlign: "center", padding: "24px", background: "var(--surface)", borderTop: "1px solid var(--border)", width: "100%" }}>

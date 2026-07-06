@@ -72,26 +72,14 @@ export default function Candidates({ role }) {
         </div>
 
         {role !== "ORG_ADMIN" && (
-          <div style={{ cursor: "pointer", transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)" }} onClick={() => setIsPanelOpen(true)} onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.children[0].style.boxShadow = "0 12px 40px 0 rgba(31, 38, 135, 0.15)"; e.currentTarget.children[0].style.background = "rgba(255, 255, 255, 0.8)"; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.children[0].style.boxShadow = "0 8px 32px 0 rgba(31, 38, 135, 0.1)"; e.currentTarget.children[0].style.background = "rgba(255, 255, 255, 0.6)"; }}>
-            <button style={{
-              background: "rgba(255, 255, 255, 0.6)",
-              backdropFilter: "blur(12px)",
-              WebkitBackdropFilter: "blur(12px)",
-              border: "1px solid rgba(255, 255, 255, 0.8)",
-              borderRadius: 16,
-              width: 200,
-              height: 60,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "var(--primary)",
-              boxShadow: "0 8px 32px 0 rgba(31, 38, 135, 0.1)",
-              padding: 0,
-              transition: "all 0.3s ease"
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>ADD CANDIDATE</span>
-            </button>
-          </div>
+          <button 
+            className="btn-primary" 
+            onClick={() => setIsPanelOpen(true)}
+            style={{ padding: "10px 24px", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1, marginTop: -2 }}>+</span>
+            Add Candidate
+          </button>
         )}
       </div>
 

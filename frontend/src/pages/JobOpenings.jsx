@@ -58,59 +58,57 @@ export default function JobOpenings({ onOpenJob }) {
           <h1 className="page-title" style={{ margin: 0, textAlign: "left" }}>Job Openings</h1>
           <p className="text-secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 14 }}>Create and manage active job postings.</p>
         </div>
-        
-        <div style={{ cursor: "pointer", transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)" }} onClick={() => setIsPanelOpen(true)} onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.children[0].style.boxShadow = "0 12px 40px 0 rgba(31, 38, 135, 0.15)"; e.currentTarget.children[0].style.background = "rgba(255, 255, 255, 0.8)"; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.children[0].style.boxShadow = "0 8px 32px 0 rgba(31, 38, 135, 0.1)"; e.currentTarget.children[0].style.background = "rgba(255, 255, 255, 0.6)"; }}>
-          <button style={{
-            background: "rgba(255, 255, 255, 0.6)",
-            backdropFilter: "blur(12px)",
-            WebkitBackdropFilter: "blur(12px)",
-            border: "1px solid rgba(255, 255, 255, 0.8)",
-            borderRadius: 16,
-            width: 200,
-            height: 60,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--primary)",
-            boxShadow: "0 8px 32px 0 rgba(31, 38, 135, 0.1)",
-            padding: 0,
-            transition: "all 0.3s ease"
-          }}>
-            <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>ADD NEW POST</span>
-          </button>
-        </div>
       </div>
 
-      <div className="card" style={{ width: "100%", maxWidth: 1600 }}>
-        <div style={{ padding: 0 }}>
-          {jobs.length === 0 ? (
-            <div style={{ padding: 64, textAlign: "center", color: "var(--text-secondary)" }}>
-              No job openings found. Click the button above to create one.
+      <div style={{ width: "100%", maxWidth: 1600 }}>
+        <div className="grid-3">
+          {/* Add New Post Card */}
+          <div 
+            className="card" 
+            style={{ 
+              cursor: "pointer", 
+              transition: "transform 0.2s, box-shadow 0.2s", 
+              display: "flex", 
+              flexDirection: "column", 
+              alignItems: "center", 
+              justifyContent: "center",
+              padding: 24, 
+              minHeight: 160,
+              background: "rgba(37, 99, 235, 0.03)",
+              border: "2px dashed rgba(37, 99, 235, 0.2)",
+              textAlign: "center"
+            }}
+            onClick={() => setIsPanelOpen(true)}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 12px 24px rgba(0,0,0,0.1)"; e.currentTarget.style.borderColor = "var(--primary)"; e.currentTarget.style.background = "rgba(37, 99, 235, 0.08)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "var(--shadow)"; e.currentTarget.style.borderColor = "rgba(37, 99, 235, 0.2)"; e.currentTarget.style.background = "rgba(37, 99, 235, 0.03)"; }}
+          >
+            <div style={{ width: 48, height: 48, borderRadius: "50%", background: "rgba(37, 99, 235, 0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--primary)", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>
+              +
             </div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Job Title</th>
-                  <th>Status</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => (
-                  <tr key={job.id}>
-                    <td>
-                      <button className="btn-ghost btn-sm" onClick={() => onOpenJob(job.id, job.title)} style={{ padding: 0, fontWeight: 600, color: "var(--primary)" }}>
-                        {job.title}
-                      </button>
-                    </td>
-                    <td><span className="badge badge-completed">{job.status || "Open"}</span></td>
-                    <td className="text-secondary">{job.description}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+            <h3 style={{ margin: 0, fontSize: 16, color: "var(--primary)" }}>Create New Post</h3>
+          </div>
+
+          {jobs.map((job) => (
+            <div 
+              key={job.id} 
+              className="card" 
+              style={{ cursor: "pointer", transition: "transform 0.2s, box-shadow 0.2s", display: "flex", flexDirection: "column", padding: 24, minHeight: 160 }}
+              onClick={() => onOpenJob(job.id, job.title)}
+              onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 12px 24px rgba(0,0,0,0.1)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "var(--shadow)"; }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 18, color: "var(--primary)" }}>{job.title}</h3>
+                <span className="badge badge-completed">{job.status || "Open"}</span>
+              </div>
+              <p className="text-secondary" style={{ flex: 1, margin: "0 0 16px 0", fontSize: 14, lineHeight: 1.5 }}>
+                {job.description || "No description provided."}
+              </p>
+              <div style={{ marginTop: "auto", display: "flex", justifyContent: "flex-end" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--primary)" }}>View Candidates &rarr;</span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

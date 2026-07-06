@@ -50,10 +50,11 @@ export default function HRDashboard({ onOpenJob }) {
         </div>
       </div>
 
+      <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--text)" }}>Active Job Openings</h2>
+      </div>
+
       <div className="card">
-        <div style={{ padding: "24px 28px", borderBottom: "1px solid var(--border)" }}>
-          <h2 style={{ fontSize: 18, margin: 0 }}>Active Job Openings</h2>
-        </div>
         <div style={{ padding: 0 }}>
           {jobs.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--text-secondary)" }}>
