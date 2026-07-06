@@ -282,27 +282,42 @@ def super_admin_dashboard():
     
 @router.post("/api/job-openings")
 async def create_job_opening(
-    body: CreateJobOpeningRequest,
+    title: str = Form(...),
+    description: str = Form(""),
+    jd_file: UploadFile = File(None),
     authorization: str = Header(None)
 ):
     user, ctx = _require_context(authorization)
 
     org_id = ctx["organization_id"]
 
+    jd_text = ""
+    temp_path = None
+    if jd_file:
+        temp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{jd_file.filename}")
+        with open(temp_path, "wb") as f:
+            f.write(await jd_file.read())
+        jd_text = extraction.extract_text(temp_path)
+
     result = (
         db._db()
         .table("job_openings")
         .insert({
-            "organization_id": org_id,
-            "title": body.title,
-            "description": body.description,
-            "jd_text": body.jd_text,
-            "status": "ACTIVE"
+            "title": title,
+            "description": description,
+            "jd_text": jd_text,
+            "organization_id": org_id
         })
         .execute()
     )
+    
+    if result.data:
+        job_id = result.data[0]["id"]
+        if temp_path and os.path.exists(temp_path):
+            new_path = os.path.join(UPLOAD_DIR, f"job_{job_id}.pdf")
+            os.rename(temp_path, new_path)
 
-    return result.data[0]
+    return {"message": "Job opening created", "id": result.data[0]["id"] if result.data else None}
 
 @router.get("/api/job-openings")
 def list_job_openings(
@@ -1130,7 +1145,7 @@ async def upload_candidate_resume(
     candidate_name = analysis.get("candidateName") or "Unknown"
     candidate_email = analysis.get("candidateEmail") or ""
 
-    db._db().table("candidates").insert({
+    cand_res = db._db().table("candidates").insert({
         "name": candidate_name,
         "email": candidate_email,
         "role": job["title"],
@@ -1139,13 +1154,34 @@ async def upload_candidate_resume(
         "organization_id": org_id,
         "analysis": analysis
     }).execute()
+    
+    if cand_res.data:
+        candidate_id = cand_res.data[0]["id"]
+        new_rp = os.path.join(UPLOAD_DIR, f"candidate_{candidate_id}.pdf")
+        os.rename(rp, new_rp)
 
     return {
         "message": "Candidate created",
         "name": candidate_name,
         "email": candidate_email,
-        "analysis": analysis
+        "analysis": analysis,
+        "id": cand_res.data[0]["id"] if cand_res.data else None
     }
+    
+@router.get("/api/documents/candidate/{candidate_id}")
+def get_candidate_resume(candidate_id: str):
+    path = os.path.join(UPLOAD_DIR, f"candidate_{candidate_id}.pdf")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/pdf")
+    raise HTTPException(status_code=404, detail="Original PDF not found")
+
+@router.get("/api/documents/job/{job_id}")
+def get_job_jd(job_id: str):
+    path = os.path.join(UPLOAD_DIR, f"job_{job_id}.pdf")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/pdf")
+    raise HTTPException(status_code=404, detail="Original PDF not found")
+
 # ─── US-AG-02 + scheduling: generate questions, store, email, schedule bot ──
 @router.post("/api/schedule")
 async def schedule(request: Request, authorization: str = Header(None)):

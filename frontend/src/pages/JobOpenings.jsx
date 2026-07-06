@@ -4,6 +4,7 @@ import API from "../api";
 export default function JobOpenings({ onOpenJob }) {
   const [jobs, setJobs] = useState([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [previewJob, setPreviewJob] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const [title, setTitle] = useState("");
@@ -26,18 +27,16 @@ export default function JobOpenings({ onOpenJob }) {
     e.preventDefault();
     setLoading(true);
     try {
-      // If we supported PDF upload for JD, we'd use FormData.
-      // For now, since backend expects jd_text, we mock extracting text from the file or send form data if backend supports it.
-      // Since backend expects jd_text as per previous implementation, we'll just send dummy text for now 
-      // if they upload a file, or if the backend supports file upload we'd change it.
-      // In the original code, it was jd_text. I'll stick to jd_text for API payload.
-      const payload = {
-        title,
-        description,
-        jd_text: jdFile ? `(PDF File Attached: ${jdFile.name})` : ""
-      };
+      const formData = new FormData();
+      formData.append("title", title);
+      formData.append("description", description);
+      if (jdFile) {
+        formData.append("jd_file", jdFile);
+      }
 
-      await API.post("/api/job-openings", payload);
+      await API.post("/api/job-openings", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
 
       setTitle("");
       setDescription("");
@@ -104,7 +103,14 @@ export default function JobOpenings({ onOpenJob }) {
               <p className="text-secondary" style={{ flex: 1, margin: "0 0 16px 0", fontSize: 14, lineHeight: 1.5 }}>
                 {job.description || "No description provided."}
               </p>
-              <div style={{ marginTop: "auto", display: "flex", justifyContent: "flex-end" }}>
+              <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <button 
+                  className="btn-secondary btn-sm" 
+                  onClick={(e) => { e.stopPropagation(); setPreviewJob(job); }}
+                  style={{ fontSize: 12, padding: "4px 8px" }}
+                >
+                  Preview JD
+                </button>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--primary)" }}>View Candidates &rarr;</span>
               </div>
             </div>
@@ -168,6 +174,27 @@ export default function JobOpenings({ onOpenJob }) {
           </form>
         </div>
       </div>
+
+      {/* JD Preview Panel */}
+      {previewJob && (
+        <>
+          <div className="slide-over-overlay" onClick={() => setPreviewJob(null)}></div>
+          <div className="slide-over-panel open">
+            <div style={{ padding: "24px 32px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Job Description: {previewJob.title}</h2>
+              <button className="btn-ghost" onClick={() => setPreviewJob(null)} style={{ padding: "4px 8px", fontSize: 20 }}>&times;</button>
+            </div>
+            <div style={{ flex: 1, padding: 0 }}>
+              <iframe 
+                src={`${API.defaults.baseURL || ""}/api/documents/job/${previewJob.id}`} 
+                style={{ width: "100%", height: "100%", border: "none" }}
+                title="Job Description PDF"
+              ></iframe>
+            </div>
+          </div>
+        </>
+      )}
+
     </div>
   );
 }

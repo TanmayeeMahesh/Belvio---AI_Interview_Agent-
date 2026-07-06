@@ -6,6 +6,7 @@ export default function Candidates({ role }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [previewCandidate, setPreviewCandidate] = useState(null);
   const [creating, setCreating] = useState(false);
 
   const [name, setName] = useState("");
@@ -101,6 +102,7 @@ export default function Candidates({ role }) {
                   <th>Email</th>
                   <th>Role</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -115,6 +117,15 @@ export default function Candidates({ role }) {
                       ) : (
                         <span className="badge badge-incomplete">Pending</span>
                       )}
+                    </td>
+                    <td>
+                      <button 
+                        className="btn-secondary btn-sm" 
+                        onClick={() => setPreviewCandidate(c)}
+                        style={{ fontSize: 12, padding: "4px 8px" }}
+                      >
+                        Preview Resume
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -181,6 +192,27 @@ export default function Candidates({ role }) {
           </form>
         </div>
       </div>
+
+      {/* Resume Preview Panel */}
+      {previewCandidate && (
+        <>
+          <div className="slide-over-overlay" onClick={() => setPreviewCandidate(null)}></div>
+          <div className="slide-over-panel open">
+            <div style={{ padding: "24px 32px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Resume: {previewCandidate.name}</h2>
+              <button className="btn-ghost" onClick={() => setPreviewCandidate(null)} style={{ padding: "4px 8px", fontSize: 20 }}>&times;</button>
+            </div>
+            <div style={{ flex: 1, padding: 0 }}>
+              <iframe 
+                src={`${API.defaults.baseURL || ""}/api/documents/candidate/${previewCandidate.id}`} 
+                style={{ width: "100%", height: "100%", border: "none" }}
+                title="Resume PDF"
+              ></iframe>
+            </div>
+          </div>
+        </>
+      )}
+
     </div>
   );
 }
