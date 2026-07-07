@@ -9,3 +9,9 @@ pypdf
 reportlab
 cryptography
 python-multipart
+
+# ── Proctoring video analysis (Mode A) ──
+opencv-python-headless   # frame extraction (headless = no GUI libs)
+mediapipe                # local face presence/count (CPU, no torch)
+google-generativeai      # Gemini vision (phone / 2nd-person on flagged frames)
+openai                   # OpenAI vision fallback
