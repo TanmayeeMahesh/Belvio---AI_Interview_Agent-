@@ -57,24 +57,36 @@ def analyze_transcript_authenticity(session_id):
 
     transcript = "\n\n".join(
         f"TOPIC: {p['topic']}\nQ: {p['question']}\nA: {p['answer']}" for p in pairs)
-    prompt = f"""You are checking interview answers for signs they were READ FROM AI-GENERATED TEXT
-(e.g. copied from ChatGPT) instead of spoken spontaneously. The input is speech-to-text.
+    prompt = f"""You are checking whether interview answers were READ VERBATIM from AI-generated text
+(e.g. copied from ChatGPT) instead of spoken. The input is speech-to-text.
 
-Signs of AI-read answers: essay-like structure ("firstly... secondly... in conclusion"), textbook or
-overly formal register unusual for speech, unnaturally complete and polished, vocabulary that doesn't
-match conversational talk.
-Signs of genuine speech: hesitation, self-correction, informal phrasing, personal specifics, imperfect
-structure.
+DEFAULT TO "low". Most real candidates — including articulate, well-prepared, or non-native speakers —
+sound polished and structured. That is NORMAL and is NOT evidence. This is a soft signal for human
+review, and false accusations are worse than misses, so only escalate on STRONG, SPECIFIC evidence.
 
-IMPORTANT: this is a SOFT signal for human review, NOT proof. Articulate or well-prepared candidates,
-and non-native speakers who rehearsed, can sound polished honestly. Be CONSERVATIVE — do not over-flag.
+Do NOT flag for any of these (they are normal human speech):
+- being articulate, fluent, confident, or using good vocabulary
+- a structured or correct answer
+- formal phrasing, or non-native English phrasing
+- absence of "um"/"uh" — speech-to-text strips those, so it means nothing
+
+Escalate ONLY on concrete tells of reading AI text aloud, e.g.:
+- verbatim textbook/dictionary-style definitions with no personalization
+- meta-artifacts like "as an AI language model", "here are X points", "in summary,"
+- long, perfectly enumerated lists recited without any hesitation or self-reference
+- register that abruptly shifts from conversational to essay-like mid-interview
+
+Scoring: "low" = no concrete tells (the usual case). "medium" = one clear concrete tell.
+"high" = multiple concrete tells across answers. When unsure, choose "low".
+Only include an answer in flagged_answers if it has a CONCRETE tell (cite the specific phrase). An empty
+list is the expected, correct result for a normal candidate.
 
 TRANSCRIPT:
 {transcript}
 
 Reply ONLY valid JSON, no markdown:
 {{"ai_likelihood":"low|medium|high",
-"flagged_answers":[{{"topic":"<topic>","reason":"<short reason, <=12 words>"}}]}}"""
+"flagged_answers":[{{"topic":"<topic>","reason":"<the specific tell, <=12 words>"}}]}}"""
     try:
         resp = _client().chat.completions.create(
             model=_PROCTOR_MODEL, messages=[{"role": "user", "content": prompt}],

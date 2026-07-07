@@ -430,6 +430,21 @@ def list_stuck_sessions(older_than_minutes: int = 120) -> list:
         return []
 
 
+def list_stale_scheduled_sessions(older_than_minutes: int = 30) -> list:
+    """Sessions still 'scheduled' whose scheduled_at is well past — candidate never joined → no_show."""
+    db = _db()
+    if not db:
+        return []
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+        res = (db.table("sessions").select("id, scheduled_at")
+               .eq("status", "scheduled").lt("scheduled_at", cutoff).execute())
+        return res.data or []
+    except Exception as e:
+        print(f"❌ list_stale_scheduled_sessions() failed: {e}")
+        return []
+
+
 def get_report(session_id) -> dict:
     """Read the report row for a session."""
     db = _db()

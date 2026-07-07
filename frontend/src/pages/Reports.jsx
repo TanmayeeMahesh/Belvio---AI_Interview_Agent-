@@ -330,7 +330,8 @@ export default function Reports({ token, defaultSessionId }) {
             </div>
           ) : (
             <div className="card" style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
-              Recording is still processing — it can take a few minutes after the interview ends. Use ↻ to refresh.
+              Recording not available. If the interview just ended, it can take a few minutes to process —
+              use ↻ to refresh. For older interviews it may have expired on the provider.
             </div>
           )}
 
