@@ -975,8 +975,19 @@ async def handle_transcription(request: Request, background_tasks: BackgroundTas
         no_words  = ["no", "don't", "stop", "refuse"]
         yes_words = ["yes", "sure", "okay", "ok", "proceed", "agree", "yeah", "yep", "consent"]
         if any(w in text.lower() for w in no_words):
-            background_tasks.add_task(speak, sess, "Understood. Interview cancelled. Thank you.")
+            # candidate explicitly declined consent → close immediately as 'declined' (distinct status)
+            sess.interview_over = True
+            sess.completion_status = "declined"
+            background_tasks.add_task(speak, sess, "Understood. The interview is cancelled. Thank you for your time.")
             background_tasks.add_task(leave_call, bot_id)
+            if sess.session_id:
+                db.close_session(sess.session_id, "declined", 0)
+            with _registry_lock:
+                SESSIONS.pop(sess.bot_id, None)
+                if sess.routing_key:
+                    ROUTING.pop(sess.routing_key, None)
+            print(f"🚫 [{bot_id[:8]}] candidate declined consent → declined")
+            return {"status": "ok"}
         elif any(w in text.lower() for w in yes_words) or len(text.split()) <= 3:
             sess.interview_started = True
             sess.interview_start_time = time.time()
