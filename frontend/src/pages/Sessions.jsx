@@ -199,6 +199,9 @@ export default function Sessions({ token, onViewReport }) {
                   <td>
                     <div className="font-semibold">{s.candidate_name || '—'}</div>
                     {s.candidate_email && <div className="text-xs text-secondary">{s.candidate_email}</div>}
+                    <div className="text-xs text-secondary" style={{ fontFamily: 'monospace' }} title={s.id}>
+                      ID: {s.id?.slice(0, 8)}
+                    </div>
                   </td>
                   <td className="text-secondary">{s.role || '—'}</td>
                   <td><StatusBadge status={s.status} /></td>

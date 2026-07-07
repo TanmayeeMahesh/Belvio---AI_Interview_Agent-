@@ -224,6 +224,9 @@ export default function Reports({ token, defaultSessionId }) {
                     <td>
                       <div className="font-semibold">{s.candidate_name || '—'}</div>
                       {s.candidate_email && <div className="text-xs text-secondary">{s.candidate_email}</div>}
+                      <div className="text-xs text-secondary" style={{ fontFamily: 'monospace' }} title={s.id}>
+                        ID: {s.id?.slice(0, 8)}
+                      </div>
                     </td>
                     <td className="text-secondary">{s.role || '—'}</td>
                     <td className="text-secondary text-sm">{fmtDate(s.scheduled_at || s.created_at)}</td>
@@ -280,6 +283,9 @@ export default function Reports({ token, defaultSessionId }) {
               <div>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{candidateName}</div>
                 <div className="text-secondary text-sm">{candidateRole}</div>
+                <div className="text-xs text-secondary" style={{ fontFamily: 'monospace', marginTop: 2 }}>
+                  Session ID: {selectedId}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <div style={{ textAlign: 'right' }}>
