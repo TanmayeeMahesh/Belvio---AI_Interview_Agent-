@@ -127,6 +127,8 @@ export default function Sessions({ token, onViewReport }) {
     if (search) {
       const q = search.toLowerCase()
       return (s.candidate_name || '').toLowerCase().includes(q)
+          || (s.candidate_email || '').toLowerCase().includes(q)
+          || (s.id || '').toLowerCase().includes(q)
     }
     return true
   })
@@ -149,7 +151,7 @@ export default function Sessions({ token, onViewReport }) {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search candidate name…"
+            placeholder="Search name, email, or session ID…"
             style={{ height: 34, flex: '2 1 180px' }}
           />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
