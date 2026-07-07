@@ -158,6 +158,16 @@ def hr_report(session_id: str, authorization: str = Header(None)):
     _require_user(authorization)
     return db.get_report(session_id)
 
+@router.post("/api/hr/session/{session_id}/analyze-integrity")
+def hr_analyze_integrity(session_id: str, authorization: str = Header(None)):
+    """Run (or re-run) integrity analysis for a session on demand — handy for local testing on an
+    existing transcript without conducting a fresh interview. Runs in the background; returns immediately."""
+    _require_user(authorization)
+    import proctor, threading
+    threading.Thread(target=proctor.analyze_session, args=(session_id, None), daemon=True).start()
+    return {"status": "started", "session_id": session_id}
+
+
 @router.get("/api/hr/session/{session_id}/recording")
 def hr_recording_url(session_id: str, authorization: str = Header(None)):
     """Return a FRESH pre-signed recording URL (Recall's links expire in hours, so we re-fetch

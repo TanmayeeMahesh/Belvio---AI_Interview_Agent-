@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import API from '../api'
 
-const STATUS_OPTIONS = ['all', 'scheduled', 'in_progress', 'completed', 'incomplete', 'no_show', 'capped']
+const STATUS_OPTIONS = ['all', 'scheduled', 'in_progress', 'completed', 'incomplete', 'no_show', 'declined', 'capped']
 const RESULT_OPTIONS = ['all', 'Strongly Recommended', 'Recommended', 'Needs Further Review', 'Not Recommended']
 
 function badgeClass(status) {
@@ -127,6 +127,8 @@ export default function Sessions({ token, onViewReport }) {
     if (search) {
       const q = search.toLowerCase()
       return (s.candidate_name || '').toLowerCase().includes(q)
+          || (s.candidate_email || '').toLowerCase().includes(q)
+          || (s.id || '').toLowerCase().includes(q)
     }
     return true
   })
@@ -149,7 +151,7 @@ export default function Sessions({ token, onViewReport }) {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search candidate name…"
+            placeholder="Search name, email, or session ID…"
             style={{ height: 34, flex: '2 1 180px' }}
           />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
@@ -199,6 +201,9 @@ export default function Sessions({ token, onViewReport }) {
                   <td>
                     <div className="font-semibold">{s.candidate_name || '—'}</div>
                     {s.candidate_email && <div className="text-xs text-secondary">{s.candidate_email}</div>}
+                    <div className="text-xs text-secondary" style={{ fontFamily: 'monospace' }} title={s.id}>
+                      ID: {s.id?.slice(0, 8)}
+                    </div>
                   </td>
                   <td className="text-secondary">{s.role || '—'}</td>
                   <td><StatusBadge status={s.status} /></td>
@@ -265,7 +270,13 @@ export default function Sessions({ token, onViewReport }) {
             {reasonFor.status === 'no_show' && (
               <div>
                 <div className="text-xs text-secondary">Reason</div>
-                <div className="text-sm">Candidate did not respond to the consent prompt within 5 minutes</div>
+                <div className="text-sm">Candidate never joined, or joined but didn't respond to the consent prompt</div>
+              </div>
+            )}
+            {reasonFor.status === 'declined' && (
+              <div>
+                <div className="text-xs text-secondary">Reason</div>
+                <div className="text-sm">Candidate declined consent to be interviewed</div>
               </div>
             )}
             {reasonFor.status === 'capped' && (
