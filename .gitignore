@@ -13,6 +13,9 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+flan_t5_finetuned_local_save/
+*.zip
+*.safetensors
 
 # Uploads (PDFs, reports)
 uploads/

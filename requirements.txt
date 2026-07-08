@@ -9,3 +9,5 @@ pypdf
 reportlab
 cryptography
 python-multipart
+transformers
+torch

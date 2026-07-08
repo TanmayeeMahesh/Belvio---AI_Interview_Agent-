@@ -110,7 +110,9 @@ async def schedule(request: Request, authorization: str = Header(None)):
 
     # 1. generate the dynamic question plan (US-AG-02)
     try:
-        questions = extraction.generate_question_plan(analysis, role, qcount, keys=keys)
+        jd_text = temp.get("jd_text", "")
+        resume_text = temp.get("resume_text", "")
+        questions = extraction.generate_question_plan(analysis, role, jd_text=jd_text, resume_text=resume_text)
     except extraction.llm_stack.LLMExhausted as e:
         raise HTTPException(status_code=429,
                             detail={"error": "llm_exhausted", "providers": e.providers_tried})

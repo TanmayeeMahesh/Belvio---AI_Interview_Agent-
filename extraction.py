@@ -75,82 +75,159 @@ Return EXACTLY this JSON (no deviations):
 
 
 # ─── 3. GENERATE DYNAMIC QUESTION PLAN (US-AG-02) ─────────
-def generate_question_plan(analysis: dict, role: str = None, question_count: int = 12,
-                           keys: dict = None) -> list:
-    """
-    Returns a list of question dicts:
-      {question, topic, question_type, depth, target_skill, key_concepts:[...]}
-    matching the shape our interview engine expects (question + topic + key_concepts).
-    """
+import re
+
+_gap_model = None
+_gap_tokenizer = None
+
+def _load_gap_model():
+    global _gap_model, _gap_tokenizer
+    if _gap_model is None:
+        try:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            model_dir = "flan_t5_finetuned_local_save"
+            _gap_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+            _gap_model = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
+        except Exception as e:
+            logger.error(f"Failed to load local GAP model: {e}")
+
+def parse_question_bank(job_role: str, level: str) -> list:
+    level_map = {
+        "fresher": ["Fresher (0–1 year of experience)"],
+        "intermediate": ["Experienced (1–3 years of experience)", "Experienced (3–5 years of experience)"],
+        "experienced": ["Experienced (5+ years of experience)"]
+    }
+    
+    target_levels = level_map.get(level.lower(), level_map["intermediate"])
+    
+    try:
+        with open("question_bank.md", "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception:
+        return []
+
+    roles = re.split(r'\n## \d+\.\s+', content)
+    
+    best_role_chunk = None
+    for chunk in roles[1:]:
+        role_title = chunk.split('\n')[0].strip().lower()
+        if job_role.lower() in role_title or role_title in job_role.lower():
+            best_role_chunk = chunk
+            break
+            
+    if not best_role_chunk:
+        best_role_chunk = roles[1] if len(roles) > 1 else ""
+
+    categories = re.split(r'\n###\s+', best_role_chunk)
+    questions = []
+
+    for cat_chunk in categories[1:]:
+        lines = cat_chunk.split('\n')
+        topic = lines[0].strip()
+        
+        current_level_match = False
+        cat_q = []
+        for line in lines[1:]:
+            if line.startswith('#### '):
+                level_title = line.replace('#### ', '').strip()
+                current_level_match = any(t in level_title for t in target_levels)
+            elif current_level_match and re.match(r'^\d+\.\s+', line):
+                q_text = re.sub(r'^\d+\.\s+', '', line).strip()
+                cat_q.append(q_text)
+                
+        if cat_q:
+            questions.append({
+                "question": cat_q[0],
+                "topic": topic,
+                "question_type": "technical",
+                "depth": "medium" if level == "intermediate" else ("surface" if level == "fresher" else "deep"),
+                "target_skill": topic,
+                "key_concepts": [topic]
+            })
+            
+    return questions[:5]
+
+
+def generate_gap_questions(jd_text: str, resume_text: str) -> list:
+    _load_gap_model()
+    if not _gap_model or not _gap_tokenizer:
+        return []
+        
+    try:
+        # We skip the first 200 characters of the resume to bypass the contact info (Name, Email, Phone) 
+        # which confuses the model into thinking it's a job title. We also add an instruction.
+        clean_resume = resume_text[200:1200] if len(resume_text) > 200 else resume_text
+        prompt = f"Generate interview questions about the candidate's missing skills based on the JD. JD: {jd_text[:1000]} Resume: {clean_resume}"
+        inputs = _gap_tokenizer(prompt, return_tensors="pt")
+        outputs = _gap_model.generate(**inputs, max_new_tokens=150)
+        text = _gap_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Split the text by numbers followed by a dot or parenthesis, e.g., ' 2) ' or ' 2. ' or '^1) '
+        parts = re.split(r'(?:^|\s+)\d+[\.\)]\s*', text)
+        clean_lines = [p.strip() for p in parts if p.strip()]
+        # Just grab the first two lines that seem like reasonable questions/statements
+        questions_text = [q for q in clean_lines if len(q) > 10][:2]
+        
+        gap_questions = []
+        for q_text in questions_text:
+            gap_questions.append({
+                "question": q_text,
+                "topic": "Gap Skills",
+                "question_type": "technical",
+                "depth": "deep",
+                "target_skill": "Missing Skills",
+                "key_concepts": ["Missing Skills"]
+            })
+        return gap_questions
+    except Exception as e:
+        logger.error(f"Failed to generate gap questions: {e}")
+        return []
+
+def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", resume_text: str = "") -> list:
     role = role or analysis.get("jobRole", "Software Engineer")
     level = analysis.get("detectedLevel", "fresher")
-    level_flow = {
-        "fresher": "1.Core fundamentals 2.Basic problem-solving 3.Projects 4.Theory 5.Motivation 6.Career goals",
-        "intermediate": "1.Core tech 2.Hands-on implementation 3.Debugging/trade-offs 4.Collaboration 5.Motivation 6.Career goals",
-        "experienced": "1.Complex challenges 2.Team leadership 3.System design/strategy 4.Motivation 5.Career goals",
-    }.get(level, "1.Core fundamentals 2.Problem-solving 3.Projects 4.Motivation 5.Career goals")
 
-    system = ("You are a world-class technical interviewer. Generate precise, insightful interview "
-              "questions tailored to the candidate. ALWAYS return ONLY a valid JSON array.")
-    user = f"""Generate a structured interview question plan.
-
-ROLE: {role}
-CANDIDATE LEVEL: {level}  ({analysis.get('levelReason','')})
-SKILLS FROM RESUME: {', '.join(analysis.get('skills', []) or [])}
-TECH STACK: {', '.join(analysis.get('technicalStack', []) or [])}
-GAP / MISSING SKILLS (skills the JD requires that the resume lacks): {', '.join(analysis.get('missingSkills', []) or [])}
-BRIEFING: {analysis.get('analysisSummary','')}
-
-FLOW (follow this order): {level_flow}
-Structure: introduction → core technology → practical/scenario → gap areas → closing.
-Generate EXACTLY {max(10, min(question_count, 20))} questions (spec requires 10-20).
-
-CRITICAL DIFFICULTY-TO-SOURCE MAPPING (follow strictly):
-- "surface" and "medium" depth questions MUST be grounded in the RESUME: verify the candidate can
-  genuinely explain the skills, projects, and experience THEY CLAIM. Reference their actual listed
-  skills/projects so a bluffer is exposed and an honest candidate can shine.
-- "deep" depth questions MUST target the GAP / MISSING SKILLS: probe whether the candidate has
-  adjacent knowledge, transferable experience, or learning aptitude for what the JD expects but the
-  resume does not show — i.e., if they join the company, can they adapt to those concepts?
-- Difficulty progresses through the interview: early questions surface, middle medium, late deep.
-
-Return ONLY a JSON array, each item EXACTLY:
-[
-  {{
-    "question": "the question text, phrased for being read aloud (TTS) — natural and clear",
-    "topic": "short topic label (e.g. 'System Design')",
-    "question_type": "technical|behavioral|scenario|introduction|closing",
-    "depth": "surface|medium|deep",
-    "target_skill": "the skill this probes",
-    "key_concepts": ["concept the answer should cover", "..."]
-  }}
-]"""
-    plan = llm_stack.call_json(system, user, job="parsing", max_tokens=3000, keys=keys)
-    if not plan or not isinstance(plan, list):
-        logger.warning("generate_question_plan: parse failed — falling back to static questions")
-        return _static_fallback()
-    # sanity: ensure each has the fields our engine needs
-    clean = []
-    for q in plan:
-        if not isinstance(q, dict) or not q.get("question"):
-            continue
-        clean.append({
-            "question": q.get("question", "").strip(),
-            "topic": q.get("topic", "General"),
-            "question_type": q.get("question_type", "technical"),
-            "depth": q.get("depth", "medium"),
-            "target_skill": q.get("target_skill", ""),
-            "key_concepts": q.get("key_concepts", []) if isinstance(q.get("key_concepts"), list) else [],
-        })
-    return clean or _static_fallback()
-
-
-def _static_fallback() -> list:
-    """If generation fails, fall back to the original static questions so an interview still runs."""
-    try:
-        with open("speech_interview_logic/sample_questions.json") as f:
-            return json.load(f)
-    except Exception:
-        return [{"question": "Can you briefly introduce yourself and your current role?",
-                 "topic": "Introduction", "question_type": "introduction", "depth": "surface",
-                 "target_skill": "communication", "key_concepts": ["role", "experience"]}]
+    questions = []
+    
+    questions.append({
+        "question": "To begin, could you please introduce yourself? Feel free to walk us through your educational background, professional experience, and anything else you'd like us to know.",
+        "topic": "Introduction",
+        "question_type": "introduction",
+        "depth": "surface",
+        "target_skill": "communication",
+        "key_concepts": ["introduction", "background"]
+    })
+    questions.append({
+        "question": "Could you tell us about a project you've worked on that you're particularly proud of? Please describe the problem you were solving, your specific role and contributions, the tools or technologies you used, and the final outcome or impact.",
+        "topic": "Projects",
+        "question_type": "behavioral",
+        "depth": "medium",
+        "target_skill": "experience",
+        "key_concepts": ["project", "impact", "tools"]
+    })
+    
+    bank_questions = parse_question_bank(role, level)
+    questions.extend(bank_questions)
+    
+    if jd_text and resume_text:
+        gap_questions = generate_gap_questions(jd_text, resume_text)
+        questions.extend(gap_questions)
+        
+    questions.append({
+        "question": "As we wrap up, where do you see yourself professionally over the next five years, and how do you feel this role would fit into that journey?",
+        "topic": "Career Goals",
+        "question_type": "closing",
+        "depth": "medium",
+        "target_skill": "motivation",
+        "key_concepts": ["future", "goals"]
+    })
+    questions.append({
+        "question": "Finally, do you have any questions for us — about the role, the team, the company, or anything else you'd like to know before we conclude the interview?",
+        "topic": "Candidate Questions",
+        "question_type": "closing",
+        "depth": "surface",
+        "target_skill": "curiosity",
+        "key_concepts": ["questions"]
+    })
+    
+    return questions
