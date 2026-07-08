@@ -27,4 +27,5 @@ def test_select_questions_from_question_bank_uses_experience_and_gaps():
     }
     assert sum(1 for q in questions if q.get("selection_reason") == "gap") == 2
     assert sum(1 for q in questions if q.get("source") == "gap_analysis") == 2
-    assert sum(1 for q in questions if q.get("source") == "question_bank") == 5
+    assert sum(1 for q in questions if q.get("selection_reason") == "common") == 4
+    assert sum(1 for q in questions if q.get("source") == "question_bank") == 9

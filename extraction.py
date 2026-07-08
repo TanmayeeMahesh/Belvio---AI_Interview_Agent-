@@ -159,6 +159,43 @@ def _build_gap_question(skill: str, category: str) -> dict:
     }
 
 
+def _extract_common_questions(path: str = None) -> list:
+    bank_path = path or QUESTION_BANK_PATH
+    if not os.path.exists(bank_path):
+        return []
+
+    questions = []
+    in_common_section = False
+    with open(bank_path, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line == "## General / Common Interview Questions":
+                in_common_section = True
+                continue
+            if in_common_section and line.startswith("## "):
+                break
+            if in_common_section:
+                match = re.match(r"^\d+\.\s+(.*)$", line)
+                if match:
+                    questions.append(match.group(1))
+    return questions
+
+
+def _build_common_question(question_text: str, question_type: str) -> dict:
+    return {
+        "question": question_text,
+        "topic": "General",
+        "question_type": question_type,
+        "depth": "surface",
+        "target_skill": "communication",
+        "key_concepts": ["communication"],
+        "selection_reason": "common",
+        "source": "question_bank",
+    }
+
+
 def select_questions_from_question_bank(analysis: dict, role: str = None,
                                         question_count: int = 5,
                                         path: str = None) -> list:
@@ -178,6 +215,12 @@ def select_questions_from_question_bank(analysis: dict, role: str = None,
     tier_name = _experience_tier_for_analysis(analysis)
     missing_skills = analysis.get("missingSkills") or []
     gap_skills = []
+    common_questions = _extract_common_questions(path)[:4]
+    opening_questions = common_questions[:2]
+    closing_questions = common_questions[2:4]
+
+    for question_text in opening_questions:
+        selected.append(_build_common_question(question_text, "introduction"))
 
     for skill in missing_skills:
         mapped_category = _missing_skill_category(skill)
@@ -219,7 +262,11 @@ def select_questions_from_question_bank(analysis: dict, role: str = None,
     for category, skill in gap_skills:
         selected.append(_build_gap_question(skill, category))
 
-    return selected[: question_count + len(gap_skills)]
+    for question_text in closing_questions:
+        selected.append(_build_common_question(question_text, "closing"))
+
+    required_total = len(opening_questions) + 5 + len(gap_skills) + len(closing_questions)
+    return selected[:max(question_count, required_total)]
 
 
 # ─── 1. PDF TEXT EXTRACTION (no OCR) ──────────────────────
@@ -300,7 +347,7 @@ def generate_question_plan(analysis: dict, role: str = None, question_count: int
     bank_questions = select_questions_from_question_bank(
         analysis,
         role=role,
-        question_count=5,
+        question_count=question_count,
     )
     if bank_questions:
         return bank_questions
