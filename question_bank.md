@@ -22,6 +22,17 @@ For every job role, each of the five categories below contains 10 questions spli
 
 ---
 
+## General / Common Interview Questions
+
+These are standard interview questions that are commonly asked across most job roles and can be used in addition to role-specific questions.
+
+1. Can you introduce yourself and briefly summarize your background?
+2. Could you tell us about the projects you have worked on and your role in them?
+3. Where do you see yourself in the next 5 years?
+4. What questions do you have for us about the role or company?
+
+---
+
 ## 1. Software Engineer
 
 ### Core Concepts

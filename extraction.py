@@ -10,11 +10,216 @@ Pipeline:
 
 Prompt design adapted from the other team's claude.py; routed through our llm_stack (Gemini→Claude→Groq).
 """
-import os, json, logging
+import os, json, logging, re
 from pypdf import PdfReader
 import llm_stack
 
 logger = logging.getLogger("extraction")
+
+QUESTION_BANK_PATH = os.path.join(os.path.dirname(__file__), "question_bank.md")
+REQUIRED_CATEGORIES = [
+    "Core Concepts",
+    "Role-Specific Fundamentals",
+    "Tools & Technologies",
+    "Frameworks & Methodologies",
+    "Industry Knowledge",
+]
+
+
+def _normalize_role_name(role: str) -> str:
+    if not role:
+        return ""
+    return re.sub(r"\s+", " ", role).strip().lower()
+
+
+def _normalize_category_name(category: str) -> str:
+    if not category:
+        return ""
+    return re.sub(r"\s+", " ", category).strip()
+
+
+def _parse_question_bank(path: str = None) -> dict:
+    bank_path = path or QUESTION_BANK_PATH
+    if not os.path.exists(bank_path):
+        return {}
+
+    role_data = {}
+    current_role = None
+    current_category = None
+    current_tier = None
+
+    with open(bank_path, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            role_match = re.match(r"^##\s+\d+\.\s+(.*)$", line)
+            if role_match:
+                current_role = _normalize_role_name(role_match.group(1))
+                role_data[current_role] = {}
+                current_category = None
+                current_tier = None
+                continue
+
+            category_match = re.match(r"^###\s+(.*)$", line)
+            if category_match:
+                current_category = _normalize_category_name(category_match.group(1))
+                current_tier = None
+                if current_role:
+                    role_data[current_role][current_category] = {}
+                continue
+
+            tier_match = re.match(r"^####\s+(.*)$", line)
+            if tier_match:
+                current_tier = tier_match.group(1)
+                if current_role and current_category:
+                    role_data[current_role][current_category][current_tier] = []
+                continue
+
+            question_match = re.match(r"^\d+\.\s+(.*)$", line)
+            if question_match and current_role and current_category and current_tier:
+                role_data[current_role][current_category][current_tier].append(question_match.group(1))
+
+    return role_data
+
+
+def _find_matching_role(question_bank: dict, role: str) -> str:
+    if not question_bank:
+        return ""
+
+    normalized_role = _normalize_role_name(role)
+    if not normalized_role:
+        return ""
+
+    if normalized_role in question_bank:
+        return normalized_role
+
+    for existing_role in question_bank:
+        if normalized_role in existing_role or existing_role in normalized_role:
+            return existing_role
+
+    return ""
+
+
+def _experience_tier_for_analysis(analysis: dict) -> str:
+    level = (analysis.get("detectedLevel") or "").lower()
+    years = int(analysis.get("yearsExperience") or 0)
+
+    if level == "fresher" or years < 1:
+        return "Fresher (0–1 year of experience)"
+    if years < 3 and level != "experienced":
+        return "Experienced (1–3 years of experience)"
+    if years < 5:
+        return "Experienced (3–5 years of experience)"
+    return "Experienced (5+ years of experience)"
+
+
+def _missing_skill_category(skill: str) -> str:
+    if not skill:
+        return ""
+    s = skill.lower()
+    if any(k in s for k in ["docker", "git", "sql", "python", "java", "aws", "azure", "linux", "kubernetes", "cloud"]):
+        return "Tools & Technologies"
+    if any(k in s for k in ["design", "system", "architecture", "agile", "scrum", "kanban", "method", "framework"]):
+        return "Frameworks & Methodologies"
+    if any(k in s for k in ["security", "compliance", "industry", "regulation", "business"]):
+        return "Industry Knowledge"
+    return ""
+
+
+def _build_gap_question(skill: str, category: str) -> dict:
+    skill_text = skill.strip()
+    if category == "Tools & Technologies":
+        question = f"Can you walk us through your experience with {skill_text} and explain how you have used it in real projects?"
+        question_type = "technical"
+    elif category == "Frameworks & Methodologies":
+        question = f"How would you apply {skill_text} in a real-world project, and what trade-offs would you consider?"
+        question_type = "technical"
+    elif category == "Role-Specific Fundamentals":
+        question = f"How would you approach {skill_text} in a typical role-specific scenario?"
+        question_type = "behavioral"
+    elif category == "Industry Knowledge":
+        question = f"How do you stay current with {skill_text} and apply it in your work?"
+        question_type = "behavioral"
+    else:
+        question = f"How would you explain {skill_text} to a teammate or interviewer in a practical setting?"
+        question_type = "technical"
+
+    return {
+        "question": question,
+        "topic": category,
+        "question_type": question_type,
+        "depth": "deep",
+        "target_skill": skill_text.lower(),
+        "key_concepts": [skill_text],
+        "selection_reason": "gap",
+        "gap_skill": skill_text,
+        "source": "gap_analysis",
+    }
+
+
+def select_questions_from_question_bank(analysis: dict, role: str = None,
+                                        question_count: int = 5,
+                                        path: str = None) -> list:
+    """Select a compact, experience-aware set of questions from the markdown question bank."""
+    if question_count <= 0:
+        return []
+
+    question_bank = _parse_question_bank(path)
+    if not question_bank:
+        return []
+
+    role_name = _find_matching_role(question_bank, role or analysis.get("jobRole", "Software Engineer"))
+    if not role_name:
+        return []
+
+    selected = []
+    tier_name = _experience_tier_for_analysis(analysis)
+    missing_skills = analysis.get("missingSkills") or []
+    gap_skills = []
+
+    for skill in missing_skills:
+        mapped_category = _missing_skill_category(skill)
+        if mapped_category in REQUIRED_CATEGORIES:
+            gap_skills.append((mapped_category, skill))
+
+    gap_skills = gap_skills[:2]
+
+    for category in REQUIRED_CATEGORIES:
+        category_questions = question_bank.get(role_name, {}).get(category, {})
+        if not category_questions:
+            continue
+
+        tier_questions = category_questions.get(tier_name, [])
+        if not tier_questions:
+            tier_questions = []
+            for questions in category_questions.values():
+                if questions:
+                    tier_questions = questions
+                    break
+
+        if not tier_questions:
+            continue
+
+        selected.append({
+            "question": tier_questions[0],
+            "topic": category,
+            "question_type": "behavioral" if category in ["Role-Specific Fundamentals", "Industry Knowledge"] else "technical",
+            "depth": "surface" if tier_name.startswith("Fresher") else "medium",
+            "target_skill": category.lower(),
+            "key_concepts": [category],
+            "selection_reason": "experience",
+            "source": "question_bank",
+        })
+
+        if len(selected) >= 5:
+            break
+
+    for category, skill in gap_skills:
+        selected.append(_build_gap_question(skill, category))
+
+    return selected[: question_count + len(gap_skills)]
 
 
 # ─── 1. PDF TEXT EXTRACTION (no OCR) ──────────────────────
@@ -89,6 +294,16 @@ def generate_question_plan(analysis: dict, role: str = None, question_count: int
         "intermediate": "1.Core tech 2.Hands-on implementation 3.Debugging/trade-offs 4.Collaboration 5.Motivation 6.Career goals",
         "experienced": "1.Complex challenges 2.Team leadership 3.System design/strategy 4.Motivation 5.Career goals",
     }.get(level, "1.Core fundamentals 2.Problem-solving 3.Projects 4.Motivation 5.Career goals")
+
+    # Prefer curated questions from the markdown bank first, using the candidate's experience
+    # level and the resume/JD gap analysis to select questions.
+    bank_questions = select_questions_from_question_bank(
+        analysis,
+        role=role,
+        question_count=5,
+    )
+    if bank_questions:
+        return bank_questions
 
     system = ("You are a world-class technical interviewer. Generate precise, insightful interview "
               "questions tailored to the candidate. ALWAYS return ONLY a valid JSON array.")
