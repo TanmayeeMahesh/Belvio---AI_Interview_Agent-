@@ -57,36 +57,41 @@ def analyze_transcript_authenticity(session_id):
 
     transcript = "\n\n".join(
         f"TOPIC: {p['topic']}\nQ: {p['question']}\nA: {p['answer']}" for p in pairs)
-    prompt = f"""You are checking whether interview answers were READ VERBATIM from AI-generated text
-(e.g. copied from ChatGPT) instead of spoken. The input is speech-to-text.
+    prompt = f"""You are checking whether interview answers were likely READ from AI-generated text
+(e.g. ChatGPT/Gemini) rather than spoken spontaneously. Input is speech-to-text, so written formatting
+is lost — judge by CONTENT PATTERNS, not formatting. This is a soft signal for human review: balance
+the two errors — don't falsely accuse honest candidates, but DO surface answers with the hallmarks of
+read-aloud AI text.
 
-DEFAULT TO "low". Most real candidates — including articulate, well-prepared, or non-native speakers —
-sound polished and structured. That is NORMAL and is NOT evidence. This is a soft signal for human
-review, and false accusations are worse than misses, so only escalate on STRONG, SPECIFIC evidence.
-
-Do NOT flag for any of these (they are normal human speech):
+NOT evidence on their own (these are normal human speech):
 - being articulate, fluent, confident, or using good vocabulary
-- a structured or correct answer
-- formal phrasing, or non-native English phrasing
-- absence of "um"/"uh" — speech-to-text strips those, so it means nothing
+- a correct answer; formal phrasing; non-native English phrasing
+- absence of "um"/"uh" (speech-to-text strips those)
 
-Escalate ONLY on concrete tells of reading AI text aloud, e.g.:
-- verbatim textbook/dictionary-style definitions with no personalization
-- meta-artifacts like "as an AI language model", "here are X points", "in summary,"
-- long, perfectly enumerated lists recited without any hesitation or self-reference
-- register that abruptly shifts from conversational to essay-like mid-interview
+HALLMARKS of read-aloud AI text — weigh how MANY appear together, across answers:
+- comprehensive, textbook-style coverage that cleanly names AND defines every relevant concept
+- sustained essay structure in a spoken answer ("firstly… secondly…", tidy enumerated points)
+- polished complete sentences with NO spontaneous-speech markers at all — no self-correction, no
+  restarts, no "I think/I guess", no tangents, and no personal specifics or anecdotes
+- register reads like written prose rather than conversation
+- explicit AI artifacts: "as an AI language model", "here are N points/ways", "in summary,"
 
-Scoring: "low" = no concrete tells (the usual case). "medium" = one clear concrete tell.
-"high" = multiple concrete tells across answers. When unsure, choose "low".
-Only include an answer in flagged_answers if it has a CONCRETE tell (cite the specific phrase). An empty
-list is the expected, correct result for a normal candidate.
+Scoring:
+- low    = reads like real speech (some spontaneity, personal specifics, small imperfections)
+- medium = one or two answers show SEVERAL hallmarks together (esp. comprehensive + zero spontaneity)
+- high   = most answers show the hallmarks, OR any explicit AI artifact appears
+Genuine human answers almost always carry personal specifics or small imperfections — their COMPLETE
+absence across polished, textbook-comprehensive answers is the main signal. When truly balanced between
+low and medium, pick medium only if spontaneity markers are entirely absent.
+
+Only list an answer in flagged_answers if it shows the hallmarks; cite the specific pattern.
 
 TRANSCRIPT:
 {transcript}
 
 Reply ONLY valid JSON, no markdown:
 {{"ai_likelihood":"low|medium|high",
-"flagged_answers":[{{"topic":"<topic>","reason":"<the specific tell, <=12 words>"}}]}}"""
+"flagged_answers":[{{"topic":"<topic>","reason":"<the specific pattern, <=12 words>"}}]}}"""
     try:
         resp = _client().chat.completions.create(
             model=_PROCTOR_MODEL, messages=[{"role": "user", "content": prompt}],
