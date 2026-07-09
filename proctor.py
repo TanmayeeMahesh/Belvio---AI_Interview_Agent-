@@ -143,7 +143,7 @@ def _cloud_vision(jpeg_bytes):
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-flash-latest")   # 2.0-flash was retired 2026-06-01; alias survives future retirements
             resp = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": jpeg_bytes}])
             parsed = _parse_cloud(resp.text)
             if parsed:
@@ -165,15 +165,20 @@ def _cloud_vision(jpeg_bytes):
     return None
 
 
-def _dedupe_events(events):
-    seen, out = set(), []
+def _dedupe_events(events, per_type=8, total=25):
+    """Dedupe by (type, at) and cap PER TYPE so a noisy minor type can't evict significant ones."""
+    seen, counts, out = set(), {}, []
     for e in events:
         key = (e.get("type"), e.get("at"))
         if key in seen:
             continue
+        typ = e.get("type")
+        if counts.get(typ, 0) >= per_type:
+            continue
         seen.add(key)
+        counts[typ] = counts.get(typ, 0) + 1
         out.append(e)
-    return out[:25]
+    return out[:total]
 
 
 def _scan_video(cv2, mp, path):
@@ -181,14 +186,18 @@ def _scan_video(cv2, mp, path):
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         return {"assessed": False, "note": "could not open video"}
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    duration = (frame_count / fps) if fps else 0
+    # OpenCV 5.x returns -1 (not 0) for unavailable properties → guard with > 0, not falsiness
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = fps if fps and fps > 0 else 25.0
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    frame_count = frame_count if frame_count and frame_count > 0 else 0
+    duration = (frame_count / fps) if frame_count else 0
     if duration <= 0:
         cap.release()
         return {"assessed": False, "note": "empty/zero-length video"}
 
-    face_frames = sampled = no_face_run = 0
+    face_frames = sampled = no_face_run = multi_run = fails = 0
+    no_face_start = multi_start = None
     events, last_cloud_t = [], -_CLOUD_SEC
     mp_fd = mp.solutions.face_detection
     try:
@@ -198,83 +207,114 @@ def _scan_video(cv2, mp, path):
                 cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
                 ok, frame = cap.read()
                 if not ok:
-                    break
+                    fails += 1
+                    if fails >= 3:                 # a few consecutive seek/read failures → stop
+                        break
+                    t += _FRAME_SEC
+                    continue
+                fails = 0
+                at = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0   # actual decoded time (keyframe-accurate)
+                if at <= 0:
+                    at = t
                 sampled += 1
                 res = fd.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 n_faces = len(res.detections) if res.detections else 0
+
+                # ── face presence (run-aggregated) ──
                 if n_faces >= 1:
-                    if no_face_run >= _NOFACE_EVENT_FRAMES:
-                        events.append({"type": "no_face", "at": _fmt(t - no_face_run * _FRAME_SEC),
-                                       "duration_s": no_face_run * _FRAME_SEC})
-                    no_face_run = 0
                     face_frames += 1
+                    if no_face_run >= _NOFACE_EVENT_FRAMES and no_face_start is not None:
+                        events.append({"type": "no_face", "at": _fmt(no_face_start),
+                                       "duration_s": max(0, int(at - no_face_start))})
+                    no_face_run, no_face_start = 0, None
                 else:
+                    if no_face_run == 0:
+                        no_face_start = at
                     no_face_run += 1
+
+                # ── multiple faces (run-aggregated so it can't flood the event list) ──
                 if n_faces >= 2:
-                    events.append({"type": "multiple_faces", "at": _fmt(t)})
-                # sparse cloud check for phone / second person
-                if (GEMINI_API_KEY or OPENAI_API_KEY) and (t - last_cloud_t) >= _CLOUD_SEC:
-                    last_cloud_t = t
+                    if multi_run == 0:
+                        multi_start = at
+                    multi_run += 1
+                else:
+                    if multi_run >= 1 and multi_start is not None:
+                        events.append({"type": "multiple_faces", "at": _fmt(multi_start),
+                                       "duration_s": max(0, int(at - multi_start))})
+                    multi_run, multi_start = 0, None
+
+                # ── sparse cloud check: phone / second person ──
+                if (GEMINI_API_KEY or OPENAI_API_KEY) and (at - last_cloud_t) >= _CLOUD_SEC:
+                    last_cloud_t = at
                     ok2, jpg = cv2.imencode(".jpg", frame)
                     if ok2:
-                        cv = _cloud_vision(jpg.tobytes())
-                        if cv and cv.get("phone"):
-                            events.append({"type": "phone_visible", "at": _fmt(t)})
-                        if cv and cv.get("people", 1) >= 2:
-                            events.append({"type": "second_person", "at": _fmt(t)})
+                        cvres = _cloud_vision(jpg.tobytes())
+                        if cvres and cvres.get("phone"):
+                            events.append({"type": "phone_visible", "at": _fmt(at)})
+                        if cvres and cvres.get("people", 1) >= 2:
+                            events.append({"type": "second_person", "at": _fmt(at)})
                 t += _FRAME_SEC
     finally:
         cap.release()
 
     if sampled == 0:
         return {"assessed": False, "note": "no frames sampled"}
-    if no_face_run >= _NOFACE_EVENT_FRAMES:   # trailing no-face run
-        events.append({"type": "no_face", "at": _fmt(duration - no_face_run * _FRAME_SEC),
-                       "duration_s": no_face_run * _FRAME_SEC})
+    # flush trailing runs
+    if no_face_run >= _NOFACE_EVENT_FRAMES and no_face_start is not None:
+        events.append({"type": "no_face", "at": _fmt(no_face_start),
+                       "duration_s": max(0, int(duration - no_face_start))})
+    if multi_run >= 1 and multi_start is not None:
+        events.append({"type": "multiple_faces", "at": _fmt(multi_start),
+                       "duration_s": max(0, int(duration - multi_start))})
     face_pct = round(100 * face_frames / sampled)
     return {
         "assessed": True,
         "face_present_pct": face_pct,
         "camera_off": face_pct < 20,          # essentially never saw a face
         "sampled_frames": sampled,
-        "events": _dedupe_events(events),
+        "event_types": sorted({e.get("type") for e in events}),  # FULL set → flag is truncation-proof
+        "events": _dedupe_events(events),                        # capped list for display
     }
 
 
 def analyze_video(bot_id):
-    """Download the candidate's video from Recall and scan it. Fail-safe; serialized to protect CPU."""
+    """Download the candidate's video from Recall and scan it. Fail-safe. Only the CPU-bound scan is
+    serialized — the I/O (polling + download) runs OUTSIDE the lock so parallel sessions don't block on it."""
     if not bot_id:
         return {"assessed": False, "note": "no bot_id"}
-    with _video_lock:   # one heavy CV job at a time (2-vCPU free tier)
-        try:
-            import cv2, tempfile            # lazy: app boot never depends on these
-            import mediapipe as mp
-        except Exception as e:
-            return {"assessed": False, "note": f"cv libraries unavailable: {e}"}
-        import app_full                       # lazy: avoids circular import at load time
-        url = None
-        for _ in range(_VIDEO_WAIT):          # recording takes minutes to process
-            url = app_full.get_fresh_recording_url(bot_id, "video")
-            if url:
-                break
-            time.sleep(30)
-        if not url:
-            return {"assessed": False, "note": "video recording not available"}
-        path = tempfile.mktemp(suffix=".mp4")
-        try:
-            with requests.get(url, stream=True, timeout=120) as r:
-                r.raise_for_status()
-                with open(path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1 << 20):
-                        f.write(chunk)
+    try:
+        import cv2, tempfile               # lazy: app boot never depends on these
+        import mediapipe as mp
+    except Exception as e:
+        return {"assessed": False, "note": f"cv libraries unavailable: {e}"}
+    import app_full                          # lazy: avoids circular import at load time
+    # poll for the video URL (I/O — outside the lock; recording takes minutes to process)
+    url = None
+    for _ in range(_VIDEO_WAIT):
+        url = app_full.get_fresh_recording_url(bot_id, "video")
+        if url:
+            break
+        time.sleep(30)
+    if not url:
+        return {"assessed": False, "note": "video recording not available"}
+    # download to a temp file created atomically (I/O — outside the lock)
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        with requests.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    f.write(chunk)
+        with _video_lock:                    # serialize ONLY the CPU-bound scan (2-vCPU tier)
             return _scan_video(cv2, mp, path)
-        except Exception as e:
-            return {"assessed": False, "note": f"video analysis failed: {e}"}
-        finally:
-            try:
-                os.remove(path)               # data minimization: don't keep the video
-            except Exception:
-                pass
+    except Exception as e:
+        return {"assessed": False, "note": f"video analysis failed: {e}"}
+    finally:
+        try:
+            os.remove(path)                  # data minimization: don't keep the video
+        except Exception:
+            pass
 
 
 # ─────────────────────────── FLAG COMBINATION ───────────────────────────
@@ -287,7 +327,8 @@ def _transcript_flag(ta):
 def _video_flag(video):
     if not video or not video.get("assessed"):
         return "clean"   # not assessed adds no flag
-    vtypes = {e.get("type") for e in video.get("events", [])}
+    # prefer the full event_types set (truncation-proof); fall back to the displayed events
+    vtypes = set(video.get("event_types") or [e.get("type") for e in video.get("events", [])])
     if video.get("camera_off") or "second_person" in vtypes or "phone_visible" in vtypes:
         return "significant"
     if "no_face" in vtypes or "multiple_faces" in vtypes:
