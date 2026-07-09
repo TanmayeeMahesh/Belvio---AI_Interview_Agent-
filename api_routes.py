@@ -164,8 +164,9 @@ def hr_analyze_integrity(session_id: str, authorization: str = Header(None)):
     existing transcript without conducting a fresh interview. Runs in the background; returns immediately."""
     _require_user(authorization)
     import proctor, threading
-    threading.Thread(target=proctor.analyze_session, args=(session_id, None), daemon=True).start()
-    return {"status": "started", "session_id": session_id}
+    bot_id = db.get_bot_id_for_session(session_id)   # so a manual re-run can also test video analysis
+    threading.Thread(target=proctor.analyze_session, args=(session_id, bot_id), daemon=True).start()
+    return {"status": "started", "session_id": session_id, "bot_id": bot_id}
 
 
 @router.get("/api/hr/session/{session_id}/recording")

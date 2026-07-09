@@ -360,6 +360,30 @@ export default function Reports({ token, defaultSessionId }) {
                       ))}
                     </div>
                   )}
+                  {/* Video signals */}
+                  {fullData.integrity.video && (
+                    fullData.integrity.video.assessed ? (
+                      <div style={{ marginTop: 8, marginBottom: 4 }}>
+                        <div className="text-xs text-secondary" style={{ marginBottom: 4 }}>
+                          Video · face visible {fullData.integrity.video.face_present_pct}% of the time
+                          {fullData.integrity.video.camera_off ? ' · camera off' : ''}
+                        </div>
+                        {(fullData.integrity.video.events || []).map((e, i) => (
+                          <div key={i} className="text-sm" style={{ marginBottom: 4 }}>
+                            <span className="font-semibold">{(e.type || '').replace(/_/g, ' ')}</span>
+                            <span className="text-secondary"> · at {e.at}{e.duration_s ? ` (${e.duration_s}s)` : ''}</span>
+                          </div>
+                        ))}
+                        {(fullData.integrity.video.events || []).length === 0 && (
+                          <div className="text-sm text-secondary">No on-camera anomalies detected.</div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-secondary" style={{ marginTop: 8 }}>
+                        Video: {fullData.integrity.video.note || 'not assessed'}
+                      </div>
+                    )
+                  )}
                   <div className="text-xs text-secondary" style={{ fontStyle: 'italic', marginTop: 6 }}>
                     AI-generated signals for human review — not proof. Verify before acting.
                   </div>
