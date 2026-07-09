@@ -134,7 +134,8 @@ async def schedule(request: Request, authorization: str = Header(None)):
         session_id=session_id)
 
     # 4. email the invite now
-    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    IST = timezone(timedelta(hours=5, minutes=30))   # India Standard Time (no DST → fixed offset)
+    when_human = scheduled_for.astimezone(IST).strftime("%Y-%m-%d %H:%M") + " IST"
     email_ok = scheduler.send_invite(email, candidate_name, meeting_url, role=role, when=when_human) if email else False
 
     return {"status": "scheduled", "session_id": session_id,

@@ -858,7 +858,7 @@ async def schedule_interview(request: Request):
     if not meeting_url:
         return {"status": "error", "detail": "meeting_url is required"}
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay)
-    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    when_human = scheduled_for.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M") + " IST"
     row = db.create_scheduled_interview(meeting_url=meeting_url,
         scheduled_for_iso=scheduled_for.isoformat(), candidate_email=email or None,
         candidate_name=name or None, role=role or None)
