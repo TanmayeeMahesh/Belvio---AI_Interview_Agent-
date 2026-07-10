@@ -279,7 +279,7 @@ export default function JobDetails({ jobId, jobName, role }) {
               </div>
               <div style={{ background: "rgba(255,255,255,0.05)", padding: 16, borderRadius: 8 }}>
                 <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 4 }}>Experience Level</div>
-                <div style={{ fontSize: 16, fontWeight: "500", textTransform: "capitalize" }}>{uploadAnalysis.detectedLevel || "—"}</div>
+                <div style={{ fontSize: 16, fontWeight: "500" }}>{uploadAnalysis.detectedLevel || "—"}</div>
                 {uploadAnalysis.levelReason && <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{uploadAnalysis.levelReason}</div>}
               </div>
             </div>

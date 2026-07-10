@@ -350,7 +350,7 @@ export default function Sessions({ token, onViewReport }) {
               {filtered.map((s) => {
                 let level = "—";
                 if (s.analysis && s.analysis.detectedLevel) {
-                  level = s.analysis.detectedLevel.charAt(0).toUpperCase() + s.analysis.detectedLevel.slice(1);
+                  level = s.analysis.detectedLevel;
                 }
                 
                 return (

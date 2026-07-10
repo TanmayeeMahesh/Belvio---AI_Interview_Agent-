@@ -173,7 +173,7 @@ export default function Interviews({ onViewReport }) {
                       <div className="text-secondary text-sm">{s.candidate_email}</div>
                     </td>
                     <td><span className="text-secondary">{s.role || "—"}</span></td>
-                    <td><span className="text-secondary">{s.analysis?.detectedLevel ? s.analysis.detectedLevel.charAt(0).toUpperCase() + s.analysis.detectedLevel.slice(1) : "—"}</span></td>
+                    <td><span className="text-secondary">{s.analysis?.detectedLevel || "—"}</span></td>
                     <td className="text-secondary text-sm">
                       {formatDateIST(s.scheduled_time || s.created_at)}
                     </td>

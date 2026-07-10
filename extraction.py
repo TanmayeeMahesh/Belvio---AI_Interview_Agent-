@@ -47,7 +47,7 @@ CANDIDATE RESUME:
 
 Rules:
 - Detect experience level from years of experience, job titles, project complexity, responsibilities.
-- fresher = <1 year, intermediate = 1-5 years, experienced = 5+ years.
+- "Fresher (0-1 year)" = <1 year, "Experienced (1-3 years)" = 1-3 years, "Experienced (3-5 years)" = 3-5 years, "Experienced (5+ years)" = 5+ years.
 - Scan the resume text for the candidate's email address if present.
 
 Return EXACTLY this JSON (no deviations):
@@ -55,7 +55,7 @@ Return EXACTLY this JSON (no deviations):
   "candidateName": "extracted full name or 'Candidate'",
   "candidateEmail": "extracted email or null",
   "jobRole": "the specific role title from the JD or the provided role",
-  "detectedLevel": "fresher|intermediate|experienced",
+  "detectedLevel": "Fresher (0-1 year)|Experienced (1-3 years)|Experienced (3-5 years)|Experienced (5+ years)",
   "levelReason": "one short line (e.g. '3 years React experience')",
   "yearsExperience": 0,
   "skills": ["..."],
@@ -68,7 +68,7 @@ Return EXACTLY this JSON (no deviations):
     if not result:
         logger.warning("analyze_documents: parse failed, returning minimal fallback")
         return {"candidateName": "Candidate", "candidateEmail": None, "jobRole": role,
-                "detectedLevel": "fresher", "levelReason": "", "yearsExperience": 0,
+                "detectedLevel": "Fresher (0-1 year)", "levelReason": "", "yearsExperience": 0,
                 "skills": [], "technicalStack": [], "missingSkills": [], "jdMatchScore": 0,
                 "analysisSummary": ""}
     return result
@@ -83,11 +83,12 @@ def generate_question_plan(analysis: dict, role: str = None, question_count: int
     matching the shape our interview engine expects (question + topic + key_concepts).
     """
     role = role or analysis.get("jobRole", "Software Engineer")
-    level = analysis.get("detectedLevel", "fresher")
+    level = analysis.get("detectedLevel", "Fresher (0-1 year)")
     level_flow = {
-        "fresher": "1.Core fundamentals 2.Basic problem-solving 3.Projects 4.Theory 5.Motivation 6.Career goals",
-        "intermediate": "1.Core tech 2.Hands-on implementation 3.Debugging/trade-offs 4.Collaboration 5.Motivation 6.Career goals",
-        "experienced": "1.Complex challenges 2.Team leadership 3.System design/strategy 4.Motivation 5.Career goals",
+        "Fresher (0-1 year)": "1.Core fundamentals 2.Basic problem-solving 3.Projects 4.Theory 5.Motivation 6.Career goals",
+        "Experienced (1-3 years)": "1.Core tech 2.Hands-on implementation 3.Debugging/trade-offs 4.Collaboration 5.Motivation 6.Career goals",
+        "Experienced (3-5 years)": "1.Core tech 2.Hands-on implementation 3.Debugging/trade-offs 4.Collaboration 5.Motivation 6.Career goals",
+        "Experienced (5+ years)": "1.Complex challenges 2.Team leadership 3.System design/strategy 4.Motivation 5.Career goals",
     }.get(level, "1.Core fundamentals 2.Problem-solving 3.Projects 4.Motivation 5.Career goals")
 
     system = ("You are a world-class technical interviewer. Generate precise, insightful interview "
