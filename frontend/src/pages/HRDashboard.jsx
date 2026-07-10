@@ -5,6 +5,7 @@ export default function HRDashboard({ onOpenJob }) {
   const [stats, setStats] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [previewJob, setPreviewJob] = useState(null);
 
   useEffect(() => {
     async function loadData() {
@@ -54,40 +55,64 @@ export default function HRDashboard({ onOpenJob }) {
         <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--text)" }}>Active Job Openings</h2>
       </div>
 
-      <div className="card">
-        <div style={{ padding: 0 }}>
-          {jobs.length === 0 ? (
-            <div style={{ padding: 32, textAlign: "center", color: "var(--text-secondary)" }}>
-              No active job openings found. Create one in the Job Openings tab.
-            </div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Job Title</th>
-                  <th>Status</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map(job => (
-                  <tr 
-                    key={job.id} 
-                    style={{ cursor: "pointer" }} 
-                    onClick={() => onOpenJob(job.id, job.title)}
+      <div style={{ width: "100%" }}>
+        {jobs.length === 0 ? (
+          <div className="card" style={{ padding: 64, textAlign: "center", color: "var(--text-secondary)" }}>
+            No active job openings found. Create one in the Job Openings tab.
+          </div>
+        ) : (
+          <div className="grid-3">
+            {jobs.map((job) => (
+              <div 
+                key={job.id} 
+                className="card" 
+                style={{ cursor: "pointer", transition: "transform 0.2s, box-shadow 0.2s", display: "flex", flexDirection: "column", padding: 24, minHeight: 160 }}
+                onClick={() => onOpenJob(job.id, job.title)}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 12px 24px rgba(0,0,0,0.1)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "var(--shadow)"; }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 18, color: "var(--primary)" }}>{job.title}</h3>
+                  <span className="badge badge-completed">{job.status || "Open"}</span>
+                </div>
+                <p className="text-secondary" style={{ flex: 1, margin: "0 0 16px 0", fontSize: 14, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                  {job.description || "No description provided."}
+                </p>
+                <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <button 
+                    className="btn-outline btn-sm" 
+                    onClick={(e) => { e.stopPropagation(); setPreviewJob(job); }}
+                    style={{ color: "#3b82f6", borderColor: "rgba(59, 130, 246, 0.5)" }}
                   >
-                    <td className="font-semibold" style={{ color: "var(--primary)" }}>{job.title}</td>
-                    <td><span className="badge badge-completed">{job.status || "Open"}</span></td>
-                    <td className="text-secondary" style={{ maxWidth: 300, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {job.description}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                    Preview JD
+                  </button>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--primary)" }}>View Job Details &rarr;</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* JD Preview Panel */}
+      {previewJob && (
+        <>
+          <div className="slide-over-overlay" onClick={() => setPreviewJob(null)}></div>
+          <div className="slide-over-panel open">
+            <div style={{ padding: "24px 32px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Job Description: {previewJob.title}</h2>
+              <button className="btn-ghost" onClick={() => setPreviewJob(null)} style={{ padding: "4px 8px", fontSize: 20 }}>&times;</button>
+            </div>
+            <div style={{ flex: 1, padding: 0 }}>
+              <iframe 
+                src={`${API.defaults.baseURL || ""}/api/documents/job/${previewJob.id}`} 
+                style={{ width: "100%", height: "100%", border: "none" }}
+                title="JD Preview"
+              />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -240,6 +240,7 @@ export default function JobDetails({ jobId, jobName, role }) {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Role</th>
+                  <th>Experience Level</th>
                   <th>Resume</th>
                   <th>Analysis</th>
                   <th>
@@ -254,6 +255,9 @@ export default function JobDetails({ jobId, jobName, role }) {
                     <td className="text-secondary text-sm">{c.email}</td>
                     <td>
                       <span className="badge badge-in_progress">{c.role}</span>
+                    </td>
+                    <td className="text-secondary">
+                      {c.analysis?.detectedLevel || "—"}
                     </td>
                     <td>
                       <button

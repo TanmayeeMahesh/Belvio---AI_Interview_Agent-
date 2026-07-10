@@ -8,10 +8,9 @@ export default function Candidates({ role }) {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [previewCandidate, setPreviewCandidate] = useState(null);
   const [creating, setCreating] = useState(false);
-
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [jobId, setJobId] = useState("");
+  const [resumeFile, setResumeFile] = useState(null);
 
   useEffect(() => {
     loadCandidates();
@@ -41,19 +40,27 @@ export default function Candidates({ role }) {
 
   async function createCandidate(e) {
     e.preventDefault();
+    if (!jobId) {
+      alert("Please select a Job Opening.");
+      return;
+    }
+    if (!resumeFile) {
+      alert("Please upload a Resume PDF.");
+      return;
+    }
+
     setCreating(true);
     try {
-      const selectedJob = jobs.find((j) => j.id === jobId);
-      await API.post("/api/candidates", {
-        name,
-        email,
-        role: selectedJob?.title,
-        job_opening_id: jobId,
+      const formData = new FormData();
+      formData.append("resume", resumeFile);
+      formData.append("job_opening_id", jobId);
+
+      await API.post("/api/candidates/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
       });
 
-      setName("");
-      setEmail("");
       setJobId("");
+      setResumeFile(null);
       setIsPanelOpen(false);
       loadCandidates();
     } catch (err) {
@@ -71,18 +78,29 @@ export default function Candidates({ role }) {
           <h1 className="page-title" style={{ margin: 0, textAlign: "left" }}>All Candidates</h1>
           <p className="text-secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 14 }}>View and manage the global talent pool across all jobs.</p>
         </div>
-
-        {role !== "ORG_ADMIN" && (
-          <button 
-            className="btn-primary" 
-            onClick={() => setIsPanelOpen(true)}
-            style={{ padding: "10px 24px", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}
-          >
-            <span style={{ fontSize: 18, lineHeight: 1, marginTop: -2 }}>+</span>
-            Add Candidate
-          </button>
-        )}
       </div>
+
+      {role !== "ORG_ADMIN" && (
+        <button 
+          className="btn-primary" 
+          onClick={() => setIsPanelOpen(true)}
+          style={{ 
+            width: "100%", 
+            maxWidth: 1600, 
+            marginBottom: 24, 
+            padding: "16px", 
+            fontSize: 16, 
+            fontWeight: 600, 
+            display: "flex", 
+            justifyContent: "center", 
+            alignItems: "center", 
+            gap: 8 
+          }}
+        >
+          <span style={{ fontSize: 20, lineHeight: 1, marginTop: -2 }}>+</span>
+          Add Candidate
+        </button>
+      )}
 
       <div className="card" style={{ width: "100%", maxWidth: 1600 }}>
         <div style={{ padding: 0 }}>
@@ -101,6 +119,7 @@ export default function Candidates({ role }) {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Role</th>
+                  <th>Experience Level</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -111,6 +130,7 @@ export default function Candidates({ role }) {
                     <td className="font-semibold">{c.name}</td>
                     <td className="text-secondary">{c.email}</td>
                     <td><span className="badge badge-in_progress">{c.role || "N/A"}</span></td>
+                    <td className="text-secondary">{c.analysis?.detectedLevel || "—"}</td>
                     <td>
                       {c.is_scheduled ? (
                         <span className="badge badge-scheduled">Scheduled</span>
@@ -150,30 +170,8 @@ export default function Candidates({ role }) {
         <div style={{ padding: 32, flex: 1, overflowY: "auto" }}>
           <form onSubmit={createCandidate} className="gap-20">
             <div>
-              <label>Candidate Name</label>
-              <input
-                type="text"
-                placeholder="e.g. Jane Doe"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </div>
-
-            <div>
-              <label>Candidate Email</label>
-              <input
-                type="email"
-                placeholder="jane@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-
-            <div>
               <label>Assign to Job Opening</label>
-              <select value={jobId} onChange={(e) => setJobId(e.target.value)} required>
+              <select value={jobId} onChange={(e) => setJobId(e.target.value)}>
                 <option value="">Select Job...</option>
                 {jobs.map((job) => (
                   <option key={job.id} value={job.id}>
@@ -182,6 +180,16 @@ export default function Candidates({ role }) {
                 ))}
               </select>
             </div>
+
+            <div>
+              <label>Resume (PDF)</label>
+              <input 
+                type="file" 
+                accept="application/pdf"
+                onChange={(e) => setResumeFile(e.target.files[0])}
+              />
+            </div>
+
 
             <div style={{ marginTop: 24, display: "flex", gap: 12, justifyContent: "flex-end" }}>
               <button type="button" className="btn-ghost" onClick={() => setIsPanelOpen(false)}>Cancel</button>
