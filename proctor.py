@@ -3,9 +3,10 @@ proctor.py — Post-interview INTEGRITY analysis (Mode A). Fail-safe, runs in a 
 
 Two independent signals, both FLAGS FOR HUMAN REVIEW (never verdicts):
   1. TRANSCRIPT AUTHENTICITY (text, Groq) — answers that read like AI text read aloud.
-  2. VIDEO (opencv + MediaPipe locally, Gemini→OpenAI vision on sparse frames) — face presence,
-     second person, camera off, phone visible. The heavy CV libs are imported LAZILY inside the video
-     function, so app boot never depends on them and any import issue only degrades proctoring.
+  2. VIDEO (fully local, CPU-only — no cloud, candidate frames never leave the server):
+       YuNet + SFace (OpenCV DNN) → face presence, 2nd person, same-person verification;
+       YOLOX-Nano (onnxruntime)   → phone detection. Every strong event carries a timestamp AND an
+     embedded evidence thumbnail. CV libs are imported LAZILY, so app boot never depends on them.
 
 Design rules:
   - NEVER raises into the caller — any failure saves {assessed: false}/partial and returns.
@@ -20,15 +21,27 @@ import db
 load_dotenv()
 
 _PROCTOR_MODEL = "llama-3.3-70b-versatile"   # text reasoning; runs in background, latency hidden
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Video sampling — env-tunable. Cloud calls are kept SPARSE for cost control.
-_FRAME_SEC  = int(os.getenv("PROCTOR_FRAME_SEC", "10"))   # local MediaPipe face-sample interval (s)
-_CLOUD_SEC  = int(os.getenv("PROCTOR_CLOUD_SEC", "60"))   # cloud vision (phone/2nd-person) interval (s)
-_VIDEO_WAIT = int(os.getenv("PROCTOR_VIDEO_WAIT", "20"))  # poll attempts for the video URL (×30s = 10 min)
-_NOFACE_EVENT_FRAMES = 2                                  # ≥N consecutive missing-face samples → one event
-_video_lock = threading.Lock()   # serialize video analysis (avoid CPU contention on the 2-vCPU tier)
+# ── Local CV models (baked into the image at build time; see Dockerfile) ──
+_MODELS_DIR = os.getenv("PROCTOR_MODELS_DIR", os.path.join(os.path.dirname(__file__), "models"))
+_YUNET_PATH = os.path.join(_MODELS_DIR, "face_detection_yunet_2023mar.onnx")
+_SFACE_PATH = os.path.join(_MODELS_DIR, "face_recognition_sface_2021dec.onnx")
+_YOLOX_PATH = os.path.join(_MODELS_DIR, "yolox_nano.onnx")
+
+# ── Video sampling / thresholds (env-tunable) ──
+_FRAME_SEC   = int(os.getenv("PROCTOR_FRAME_SEC", "3"))      # face-detect sample interval (s)
+_PHONE_SEC   = int(os.getenv("PROCTOR_PHONE_SEC", "6"))      # YOLOX phone-scan interval (s)
+_VIDEO_WAIT  = int(os.getenv("PROCTOR_VIDEO_WAIT", "20"))    # poll attempts for the video URL (×30s)
+_2P_MIN_SEC  = int(os.getenv("PROCTOR_2P_MIN_SEC", "10"))    # 2nd person must persist ≥Ns (ignore pass-by)
+_DP_MIN_SEC  = int(os.getenv("PROCTOR_DP_MIN_SEC", "10"))    # different-person must persist ≥Ns
+_NOFACE_MIN_SEC = int(os.getenv("PROCTOR_NOFACE_MIN_SEC", "6"))  # missing face ≥Ns → one event
+_SFACE_COS   = float(os.getenv("PROCTOR_SFACE_COS", "0.363"))    # SFace cosine same-identity cutoff
+_PHONE_CONF  = float(os.getenv("PROCTOR_PHONE_CONF", "0.35"))    # YOLOX phone confidence cutoff
+_COCO_CELLPHONE = 67                                             # COCO class id for "cell phone"
+_EVIDENCE_MAX = int(os.getenv("PROCTOR_EVIDENCE_MAX", "6"))      # cap embedded evidence thumbnails
+_THUMB_W = 320                                                   # evidence thumbnail width (px)
+_CAMERA_OFF_PCT = 20                                             # face seen in <N% of frames → camera off
+_video_lock = threading.Lock()   # serialize the CPU-bound scan (avoid contention on the 2-vCPU tier)
 
 _groq = None
 def _client():
@@ -116,53 +129,66 @@ Reply ONLY valid JSON, no markdown:
         return {"ai_likelihood": "unknown", "flagged_answers": [], "note": "analysis failed"}
 
 
-# ─────────────────────────── VIDEO ANALYSIS (Mode A) ───────────────────────────
+# ─────────────────────────── VIDEO ANALYSIS (local CV stack) ───────────────────────────
 def _fmt(sec):
     sec = max(0, int(sec))
     return f"{sec // 60:02d}:{sec % 60:02d}"
 
 
-def _parse_cloud(text):
-    """Parse the vision model's JSON reply → {'people': int, 'phone': bool} or None."""
-    import re
+def _thumb(cv2, base64mod, frame, boxes=None):
+    """Downscaled JPEG (optionally with drawn boxes) as a data: URI — embedded as HR evidence."""
     try:
-        raw = (text or "").strip().replace("```json", "").replace("```", "").strip()
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        d = json.loads(m.group(0) if m else raw)
-        return {"people": int(d.get("people", 1)), "phone": bool(d.get("phone", False))}
+        img = frame.copy()
+        for (x1, y1, x2, y2, label) in (boxes or []):
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            if label:
+                cv2.putText(img, label, (x1, max(12, y1 - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        h, w = img.shape[:2]
+        if w > _THUMB_W:
+            img = cv2.resize(img, (_THUMB_W, int(h * _THUMB_W / w)))
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        return ("data:image/jpeg;base64," + base64mod.b64encode(buf.tobytes()).decode()) if ok else None
     except Exception:
         return None
 
 
-def _cloud_vision(jpeg_bytes):
-    """Ask a vision model about ONE frame: how many people + is a phone visible. Gemini→OpenAI. None on failure."""
-    prompt = ("This is a webcam frame from a candidate in an online interview. Reply ONLY with JSON: "
-              '{"people": <number of distinct human faces visible>, "phone": <true only if a mobile '
-              'phone is clearly visible>}. Be conservative — if unsure, use people 1 and phone false.')
-    if GEMINI_API_KEY:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-flash-latest")   # 2.0-flash was retired 2026-06-01; alias survives future retirements
-            resp = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": jpeg_bytes}])
-            parsed = _parse_cloud(resp.text)
-            if parsed:
-                return parsed
-        except Exception as e:
-            print(f"[PROCTOR] gemini vision failed: {e}")
-    if OPENAI_API_KEY:
-        try:
-            from openai import OpenAI
-            b64 = base64.b64encode(jpeg_bytes).decode()
-            resp = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
-                model="gpt-4o-mini", max_tokens=60,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}])
-            return _parse_cloud(resp.choices[0].message.content)
-        except Exception as e:
-            print(f"[PROCTOR] openai vision failed: {e}")
-    return None
+def _yolox_input_size(sess):
+    shp = sess.get_inputs()[0].shape          # e.g. [1, 3, 416, 416] (dims may be strings if dynamic)
+    h = shp[2] if isinstance(shp[2], int) else 416
+    w = shp[3] if isinstance(shp[3], int) else 416
+    return h, w
+
+
+def _yolox_phone(sess, cv2, np, frame, inp_hw):
+    """YOLOX-Nano on one frame → (confidence, (x1,y1,x2,y2)) for the best 'cell phone', else (0.0, None).
+    Implements the official letterbox preprocess (BGR, no normalization) + demo_postprocess grid decode."""
+    ih, iw = frame.shape[:2]
+    H, W = inp_hw
+    r = min(H / ih, W / iw)
+    nh, nw = int(round(ih * r)), int(round(iw * r))
+    padded = np.full((H, W, 3), 114.0, dtype=np.float32)
+    padded[:nh, :nw] = cv2.resize(frame, (nw, nh)).astype(np.float32)
+    blob = np.ascontiguousarray(padded.transpose(2, 0, 1)[None], dtype=np.float32)   # 1,3,H,W
+    out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]        # 1, N, 85 (obj/cls already sigmoid)
+    grids, strides = [], []
+    for stride in (8, 16, 32):
+        hs, ws = H // stride, W // stride
+        xv, yv = np.meshgrid(np.arange(ws), np.arange(hs))
+        grids.append(np.stack((xv, yv), 2).reshape(1, -1, 2))
+        strides.append(np.full((1, hs * ws, 1), stride))
+    grids = np.concatenate(grids, 1)
+    strides = np.concatenate(strides, 1)
+    box = out[..., :4].copy()
+    box[..., :2] = (box[..., :2] + grids) * strides                   # decode xy
+    box[..., 2:4] = np.exp(box[..., 2:4]) * strides                   # decode wh
+    scores = out[0, :, 4] * out[0, :, 5 + _COCO_CELLPHONE]            # obj * P(cell phone)
+    i = int(scores.argmax())
+    if scores[i] < _PHONE_CONF:
+        return 0.0, None
+    cx, cy, bw, bh = box[0, i]
+    return float(scores[i]), (int((cx - bw / 2) / r), int((cy - bh / 2) / r),
+                              int((cx + bw / 2) / r), int((cy + bh / 2) / r))
 
 
 def _dedupe_events(events, per_type=8, total=25):
@@ -181,8 +207,10 @@ def _dedupe_events(events, per_type=8, total=25):
     return out[:total]
 
 
-def _scan_video(cv2, mp, path):
-    """Sample frames, run MediaPipe face detection + sparse cloud vision, aggregate integrity signals."""
+def _scan_video(cv2, np, ort, path):
+    """Sample frames; run YuNet (presence/count), SFace (same-person), YOLOX-Nano (phone). Aggregate."""
+    if not os.path.exists(_YUNET_PATH):
+        return {"assessed": False, "note": "face model missing (models not baked in)"}
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         return {"assessed": False, "note": "could not open video"}
@@ -195,85 +223,172 @@ def _scan_video(cv2, mp, path):
     if duration <= 0:
         cap.release()
         return {"assessed": False, "note": "empty/zero-length video"}
-
-    face_frames = sampled = no_face_run = multi_run = fails = 0
-    no_face_start = multi_start = None
-    events, last_cloud_t = [], -_CLOUD_SEC
-    mp_fd = mp.solutions.face_detection
-    try:
-        with mp_fd.FaceDetection(model_selection=1, min_detection_confidence=0.5) as fd:
-            t = 0.0
-            while t < duration:
-                cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-                ok, frame = cap.read()
-                if not ok:
-                    fails += 1
-                    if fails >= 3:                 # a few consecutive seek/read failures → stop
-                        break
-                    t += _FRAME_SEC
-                    continue
-                fails = 0
-                at = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0   # actual decoded time (keyframe-accurate)
-                if at <= 0:
-                    at = t
-                sampled += 1
-                res = fd.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                n_faces = len(res.detections) if res.detections else 0
-
-                # ── face presence (run-aggregated) ──
-                if n_faces >= 1:
-                    face_frames += 1
-                    if no_face_run >= _NOFACE_EVENT_FRAMES and no_face_start is not None:
-                        events.append({"type": "no_face", "at": _fmt(no_face_start),
-                                       "duration_s": max(0, int(at - no_face_start))})
-                    no_face_run, no_face_start = 0, None
-                else:
-                    if no_face_run == 0:
-                        no_face_start = at
-                    no_face_run += 1
-
-                # ── multiple faces (run-aggregated so it can't flood the event list) ──
-                if n_faces >= 2:
-                    if multi_run == 0:
-                        multi_start = at
-                    multi_run += 1
-                else:
-                    if multi_run >= 1 and multi_start is not None:
-                        events.append({"type": "multiple_faces", "at": _fmt(multi_start),
-                                       "duration_s": max(0, int(at - multi_start))})
-                    multi_run, multi_start = 0, None
-
-                # ── sparse cloud check: phone / second person ──
-                if (GEMINI_API_KEY or OPENAI_API_KEY) and (at - last_cloud_t) >= _CLOUD_SEC:
-                    last_cloud_t = at
-                    ok2, jpg = cv2.imencode(".jpg", frame)
-                    if ok2:
-                        cvres = _cloud_vision(jpg.tobytes())
-                        if cvres and cvres.get("phone"):
-                            events.append({"type": "phone_visible", "at": _fmt(at)})
-                        if cvres and cvres.get("people", 1) >= 2:
-                            events.append({"type": "second_person", "at": _fmt(at)})
-                t += _FRAME_SEC
-    finally:
+    ok, frame0 = cap.read()                       # read one frame to learn the frame size
+    if not ok or frame0 is None:
         cap.release()
+        return {"assessed": False, "note": "could not read frames"}
+    fh, fw = frame0.shape[:2]
+
+    detector = cv2.FaceDetectorYN.create(_YUNET_PATH, "", (fw, fh), 0.7, 0.3, 5000)
+    recog = None                                  # SFace same-person (optional)
+    if os.path.exists(_SFACE_PATH):
+        try:
+            recog = cv2.FaceRecognizerSF.create(_SFACE_PATH, "")
+        except Exception as e:
+            print(f"[PROCTOR] SFace load failed: {e}")
+    yolox = yolox_hw = None                        # YOLOX phone detection (optional)
+    if ort is not None and os.path.exists(_YOLOX_PATH):
+        try:
+            yolox = ort.InferenceSession(_YOLOX_PATH, providers=["CPUExecutionProvider"])
+            yolox_hw = _yolox_input_size(yolox)
+        except Exception as e:
+            print(f"[PROCTOR] YOLOX load failed: {e}")
+
+    sampled = face_frames = fails = embedded = 0
+    events, centers = [], []                       # centers → head-movement hint
+    ref_feat, min_sim = None, None                 # SFace enrolled feature + lowest similarity seen
+    run = {"no_face": None, "second_person": None, "different_person": None}
+    last_phone_t = -_PHONE_SEC
+    _MIN = {"no_face": _NOFACE_MIN_SEC, "second_person": _2P_MIN_SEC, "different_person": _DP_MIN_SEC}
+
+    def _largest_face(faces):
+        best, area = None, -1.0
+        for row in faces:
+            a = float(row[2]) * float(row[3])
+            if a > area:
+                area, best = a, row
+        return best
+
+    def _close_run(kind, end_at):
+        nonlocal embedded
+        st = run[kind]
+        run[kind] = None
+        if not st:
+            return
+        dur = max(0, int(end_at - st["start"]))
+        if dur >= _MIN[kind]:
+            ev = {"type": kind, "at": _fmt(st["start"]), "duration_s": dur}
+            if st.get("thumb") and embedded < _EVIDENCE_MAX:   # attach start-frame evidence (capped)
+                ev["frame"] = st["thumb"]
+                embedded += 1
+            events.append(ev)
+
+    def _open_or_extend(kind, at, frame, boxes):
+        # On open, snapshot the START frame as pending evidence — attached later only if the run
+        # qualifies (≥ its min duration). Guarantees every qualified event carries a frame even when
+        # the sampling interval never lands past the threshold mid-run. (no_face frames aren't useful.)
+        if run[kind] is None:
+            thumb = _thumb(cv2, base64, frame, boxes) if (kind != "no_face" and frame is not None) else None
+            run[kind] = {"start": at, "thumb": thumb}
+
+    t = 0.0
+    while t < duration:
+        if t == 0.0:
+            frame, at = frame0, 0.0                # reuse the frame we already read
+        else:
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                fails += 1
+                if fails >= 3:                     # a few consecutive seek/read failures → stop
+                    break
+                t += _FRAME_SEC
+                continue
+            fails = 0
+            at = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0   # actual decoded time (keyframe-accurate)
+            if at <= 0:
+                at = t
+        sampled += 1
+
+        detector.setInputSize((frame.shape[1], frame.shape[0]))
+        _, faces = detector.detect(frame)
+        faces = faces if faces is not None else []
+        n_faces = len(faces)
+
+        # ── presence / no-face run ──
+        if n_faces >= 1:
+            face_frames += 1
+            _close_run("no_face", at)
+        else:
+            _open_or_extend("no_face", at, None, None)
+
+        # ── second person (count ≥2 persisting ≥_2P_MIN_SEC → ignores pass-by) ──
+        if n_faces >= 2:
+            boxes = [(int(r[0]), int(r[1]), int(r[0] + r[2]), int(r[1] + r[3]), "face") for r in faces]
+            _open_or_extend("second_person", at, frame, boxes)
+        else:
+            _close_run("second_person", at)
+
+        # ── same-person (SFace) on the primary (largest) face ──
+        primary = _largest_face(faces) if n_faces >= 1 else None
+        if primary is not None:
+            centers.append(((float(primary[0]) + float(primary[2]) / 2) / frame.shape[1],
+                            (float(primary[1]) + float(primary[3]) / 2) / frame.shape[0]))
+        if recog is not None and primary is not None:
+            try:
+                feat = recog.feature(recog.alignCrop(frame, primary))
+                if ref_feat is None:
+                    if n_faces == 1:               # enroll only from a clean single-face frame
+                        ref_feat = feat
+                else:
+                    sim = recog.match(ref_feat, feat, cv2.FaceRecognizerSF_FR_COSINE)
+                    min_sim = sim if min_sim is None else min(min_sim, sim)
+                    if sim < _SFACE_COS:
+                        pb = [(int(primary[0]), int(primary[1]), int(primary[0] + primary[2]),
+                               int(primary[1] + primary[3]), "different")]
+                        _open_or_extend("different_person", at, frame, pb)
+                    else:
+                        _close_run("different_person", at)
+            except Exception:
+                pass                                # alignment/feature can fail on odd crops — skip frame
+        else:
+            _close_run("different_person", at)
+
+        # ── phone (YOLOX) — periodic, plus whenever the face is missing (look-away/look-down) ──
+        if yolox is not None and ((at - last_phone_t) >= _PHONE_SEC or n_faces == 0):
+            last_phone_t = at
+            try:
+                conf, pbox = _yolox_phone(yolox, cv2, np, frame, yolox_hw)
+                if pbox:
+                    ev = {"type": "phone_visible", "at": _fmt(at), "confidence": round(conf, 2)}
+                    if embedded < _EVIDENCE_MAX:
+                        th = _thumb(cv2, base64, frame, [(*pbox, f"phone {conf:.2f}")])
+                        if th:
+                            ev["frame"] = th
+                            embedded += 1
+                    events.append(ev)
+            except Exception as e:
+                print(f"[PROCTOR] yolox frame failed: {e}")
+
+        t += _FRAME_SEC
+
+    cap.release()
+    for kind in list(run.keys()):                  # flush any still-open runs at end of video
+        _close_run(kind, duration)
 
     if sampled == 0:
         return {"assessed": False, "note": "no frames sampled"}
-    # flush trailing runs
-    if no_face_run >= _NOFACE_EVENT_FRAMES and no_face_start is not None:
-        events.append({"type": "no_face", "at": _fmt(no_face_start),
-                       "duration_s": max(0, int(duration - no_face_start))})
-    if multi_run >= 1 and multi_start is not None:
-        events.append({"type": "multiple_faces", "at": _fmt(multi_start),
-                       "duration_s": max(0, int(duration - multi_start))})
     face_pct = round(100 * face_frames / sampled)
+    hm_score, hm_level = 0.0, "low"                 # head-movement hint (LOW-CONFIDENCE)
+    if len(centers) >= 3:
+        deltas = [((centers[i][0] - centers[i - 1][0]) ** 2 +
+                   (centers[i][1] - centers[i - 1][1]) ** 2) ** 0.5 for i in range(1, len(centers))]
+        hm_score = round(sum(deltas) / len(deltas), 3)
+        hm_level = "high" if hm_score >= 0.07 else "medium" if hm_score >= 0.03 else "low"
+
     return {
         "assessed": True,
+        "engine": "yunet+sface+yolox-nano (local, cpu)",
         "face_present_pct": face_pct,
-        "camera_off": face_pct < 20,          # essentially never saw a face
+        "camera_off": face_pct < _CAMERA_OFF_PCT,   # essentially never saw a face
+        "same_person": {"checked": recog is not None, "enrolled": ref_feat is not None,
+                        "min_similarity": round(min_sim, 3) if min_sim is not None else None,
+                        "threshold": _SFACE_COS},
+        "head_movement": {"level": hm_level, "score": hm_score},
+        "phone_check": yolox is not None,
         "sampled_frames": sampled,
         "event_types": sorted({e.get("type") for e in events}),  # FULL set → flag is truncation-proof
-        "events": _dedupe_events(events),                        # capped list for display
+        "events": _dedupe_events(events),                        # capped list (with thumbs) for display
     }
 
 
@@ -283,10 +398,14 @@ def analyze_video(bot_id):
     if not bot_id:
         return {"assessed": False, "note": "no bot_id"}
     try:
-        import cv2, tempfile               # lazy: app boot never depends on these
-        import mediapipe as mp
+        import cv2, numpy as np, tempfile   # lazy: app boot never depends on these
     except Exception as e:
         return {"assessed": False, "note": f"cv libraries unavailable: {e}"}
+    try:
+        import onnxruntime as ort           # optional: phone detection degrades gracefully if absent
+    except Exception as e:
+        ort = None
+        print(f"[PROCTOR] onnxruntime unavailable (phone detection off): {e}")
     import app_full                          # lazy: avoids circular import at load time
     # poll for the video URL (I/O — outside the lock; recording takes minutes to process)
     url = None
@@ -307,7 +426,7 @@ def analyze_video(bot_id):
                 for chunk in r.iter_content(chunk_size=1 << 20):
                     f.write(chunk)
         with _video_lock:                    # serialize ONLY the CPU-bound scan (2-vCPU tier)
-            return _scan_video(cv2, mp, path)
+            return _scan_video(cv2, np, ort, path)
     except Exception as e:
         return {"assessed": False, "note": f"video analysis failed: {e}"}
     finally:
@@ -329,9 +448,10 @@ def _video_flag(video):
         return "clean"   # not assessed adds no flag
     # prefer the full event_types set (truncation-proof); fall back to the displayed events
     vtypes = set(video.get("event_types") or [e.get("type") for e in video.get("events", [])])
-    if video.get("camera_off") or "second_person" in vtypes or "phone_visible" in vtypes:
+    if (video.get("camera_off") or "second_person" in vtypes
+            or "different_person" in vtypes or "phone_visible" in vtypes):
         return "significant"
-    if "no_face" in vtypes or "multiple_faces" in vtypes:
+    if "no_face" in vtypes:
         return "minor"
     return "clean"
 
@@ -346,9 +466,11 @@ def _summary(flag, ta, video):
     if n:
         bits.append(f"{n} answer(s) possibly AI-assisted ({(ta or {}).get('ai_likelihood')})")
     if video and video.get("assessed"):
-        vtypes = {e.get("type") for e in video.get("events", [])}
+        vtypes = set(video.get("event_types") or [e.get("type") for e in video.get("events", [])])
         if video.get("camera_off"):
             bits.append("camera off / face rarely visible")
+        if "different_person" in vtypes:
+            bits.append("a different person appeared (identity mismatch)")
         if "second_person" in vtypes:
             bits.append("a second person appeared on camera")
         if "phone_visible" in vtypes:

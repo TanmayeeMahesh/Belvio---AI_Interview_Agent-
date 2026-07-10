@@ -3,6 +3,7 @@ uvicorn[standard]
 python-dotenv
 requests
 groq
+google-generativeai      # Gemini for the interview LLM stack (llm_stack.py)
 gtts
 supabase
 pypdf
@@ -10,8 +11,7 @@ reportlab
 cryptography
 python-multipart
 
-# ── Proctoring video analysis (Mode A) ──
-opencv-python-headless   # frame extraction (headless = no GUI libs)
-mediapipe                # local face presence/count (CPU, no torch)
-google-generativeai      # Gemini vision (phone / 2nd-person on flagged frames)
-openai                   # OpenAI vision fallback
+# ── Proctoring video analysis (local CV stack, CPU-only, no cloud) ──
+opencv-python-headless   # frame decode + YuNet/SFace via OpenCV DNN (headless = no GUI libs)
+onnxruntime              # YOLOX-Nano phone detection (CPU; no PyTorch)
+numpy                    # array ops for YOLOX pre/post-processing

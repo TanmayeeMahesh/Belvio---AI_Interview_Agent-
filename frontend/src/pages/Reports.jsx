@@ -93,6 +93,13 @@ function IntegrityBadge({ flag }) {
   )
 }
 
+const VIDEO_EVENT_LABELS = {
+  no_face: 'Candidate left the frame',
+  second_person: 'Second person on camera',
+  different_person: 'Different person (identity mismatch)',
+  phone_visible: 'Phone visible',
+}
+
 export default function Reports({ token, defaultSessionId }) {
   const [sessions, setSessions] = useState([])
   const [selectedId, setSelectedId] = useState('')
@@ -364,14 +371,31 @@ export default function Reports({ token, defaultSessionId }) {
                   {fullData.integrity.video && (
                     fullData.integrity.video.assessed ? (
                       <div style={{ marginTop: 8, marginBottom: 4 }}>
-                        <div className="text-xs text-secondary" style={{ marginBottom: 4 }}>
+                        <div className="text-xs text-secondary" style={{ marginBottom: 6 }}>
                           Video · face visible {fullData.integrity.video.face_present_pct}% of the time
                           {fullData.integrity.video.camera_off ? ' · camera off' : ''}
+                          {fullData.integrity.video.same_person?.checked && (
+                            fullData.integrity.video.same_person.min_similarity != null
+                              ? ` · same-person similarity ${fullData.integrity.video.same_person.min_similarity} (≥${fullData.integrity.video.same_person.threshold} = same)`
+                              : ' · same-person: too few face frames')}
+                          {fullData.integrity.video.head_movement?.level && fullData.integrity.video.head_movement.level !== 'low'
+                            ? ` · head movement: ${fullData.integrity.video.head_movement.level} (low-confidence)` : ''}
                         </div>
                         {(fullData.integrity.video.events || []).map((e, i) => (
-                          <div key={i} className="text-sm" style={{ marginBottom: 4 }}>
-                            <span className="font-semibold">{(e.type || '').replace(/_/g, ' ')}</span>
-                            <span className="text-secondary"> · at {e.at}{e.duration_s ? ` (${e.duration_s}s)` : ''}</span>
+                          <div key={i} style={{ marginBottom: 10 }}>
+                            <div className="text-sm">
+                              <span className="font-semibold">{VIDEO_EVENT_LABELS[e.type] || (e.type || '').replace(/_/g, ' ')}</span>
+                              <span className="text-secondary"> · at {e.at}
+                                {e.duration_s ? ` (${e.duration_s}s)` : ''}
+                                {e.confidence != null ? ` · ${Math.round(e.confidence * 100)}% conf` : ''}</span>
+                            </div>
+                            {e.frame && (
+                              <a href={e.frame} target="_blank" rel="noreferrer" title="Open full-size evidence frame">
+                                <img src={e.frame} alt={`${e.type} evidence at ${e.at}`}
+                                     style={{ marginTop: 4, width: 200, borderRadius: 6,
+                                              border: '1px solid #e5e7eb', display: 'block' }} />
+                              </a>
+                            )}
                           </div>
                         ))}
                         {(fullData.integrity.video.events || []).length === 0 && (
