@@ -1,0 +1,23 @@
+{
+  "name": "cls",
+  "version": "1.0.0",
+  "description": "---\r title: Belvio AI Interview Agent\r emoji: 🎤\r colorFrom: blue\r colorTo: indigo\r sdk: docker\r pinned: false\r ---",
+  "homepage": "https://github.com/TanmayeeMahesh/Belvio---AI_Interview_Agent-#readme",
+  "bugs": {
+    "url": "https://github.com/TanmayeeMahesh/Belvio---AI_Interview_Agent-/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TanmayeeMahesh/Belvio---AI_Interview_Agent-.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
