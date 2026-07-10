@@ -148,6 +148,7 @@ def candidates_for_job(job_id: str):
         .table("candidates")
         .select("*")
         .eq("job_opening_id", job_id)
+        .order("created_at", desc=True)
         .execute()
     )
 

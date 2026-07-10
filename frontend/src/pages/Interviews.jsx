@@ -19,7 +19,14 @@ export default function Interviews({ onViewReport }) {
     if (showLoader) setLoading(true);
     try {
       const { data } = await API.get("/api/interviews");
-      setSessions(data);
+
+      setSessions(
+        [...data].sort(
+          (a, b) =>
+            new Date(b.scheduled_time || b.created_at) -
+            new Date(a.scheduled_time || a.created_at),
+        ),
+      );
     } catch (err) {
       console.error(err);
     } finally {
@@ -30,11 +37,19 @@ export default function Interviews({ onViewReport }) {
   function getBadgeClass(status) {
     if (!status) return "badge-scheduled";
     const s = status.toLowerCase();
-    if (s.includes("joining") || s.includes("waiting")) return "badge-in_progress";
-    if (s.includes("in_progress") || s.includes("interviewing") || s === "in progress") return "badge-in_progress";
+    if (s.includes("joining") || s.includes("waiting"))
+      return "badge-in_progress";
+    if (
+      s.includes("in_progress") ||
+      s.includes("interviewing") ||
+      s === "in progress"
+    )
+      return "badge-in_progress";
     if (s.includes("completed")) return "badge-completed";
-    if (s.includes("no_show") || s.includes("incomplete") || s === "no show") return "badge-no_show";
-    if (s.includes("time") || s.includes("limit") || s.includes("cap")) return "badge-error";
+    if (s.includes("no_show") || s.includes("incomplete") || s === "no show")
+      return "badge-no_show";
+    if (s.includes("time") || s.includes("limit") || s.includes("cap"))
+      return "badge-error";
     if (s.includes("error")) return "badge-error";
     return "badge-scheduled";
   }
@@ -42,27 +57,37 @@ export default function Interviews({ onViewReport }) {
   function formatStatusLabel(status) {
     if (!status) return "Scheduled";
     const s = status.toLowerCase();
-    
-    if (s.includes("joining") || s.includes("waiting")) return "Joining Meeting / Waiting Room";
-    if (s.includes("in_progress") || s.includes("interviewing") || s === "in progress") return "In Progress";
-    if (s.includes("no_show") || s.includes("incomplete") || s === "no show") return "Incomplete / No Show";
-    if (s.includes("time") || s.includes("limit") || s.includes("cap")) return "Time Limit Reached";
+
+    if (s.includes("joining") || s.includes("waiting"))
+      return "Joining Meeting / Waiting Room";
+    if (
+      s.includes("in_progress") ||
+      s.includes("interviewing") ||
+      s === "in progress"
+    )
+      return "In Progress";
+    if (s.includes("no_show") || s.includes("incomplete") || s === "no show")
+      return "Incomplete / No Show";
+    if (s.includes("time") || s.includes("limit") || s.includes("cap"))
+      return "Time Limit Reached";
     if (s === "completed") return "Completed";
     if (s === "scheduled") return "Scheduled";
-    
+
     // Default fallback
-    return status.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+    return status.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
   }
 
   function formatDateIST(iso) {
     if (!iso) return "—";
     try {
-      return new Date(iso).toLocaleString("en-US", {
-        timeZone: "Asia/Kolkata",
-        dateStyle: "medium",
-        timeStyle: "short",
-      }) + " IST";
-    } catch(e) {
+      return (
+        new Date(iso).toLocaleString("en-US", {
+          timeZone: "Asia/Kolkata",
+          dateStyle: "medium",
+          timeStyle: "short",
+        }) + " IST"
+      );
+    } catch (e) {
       return new Date(iso).toLocaleString([], {
         dateStyle: "medium",
         timeStyle: "short",
@@ -77,13 +102,17 @@ export default function Interviews({ onViewReport }) {
   if (loading) return <div className="page">Loading interviews...</div>;
 
   const uniqueRoles = [...new Set(sessions.map((s) => s.role).filter(Boolean))];
-  const uniqueStatuses = [...new Set(sessions.map((s) => s.status).filter(Boolean))];
+  const uniqueStatuses = [
+    ...new Set(sessions.map((s) => s.status).filter(Boolean)),
+  ];
 
   const filteredSessions = sessions.filter((s) => {
     if (statusFilter !== "all" && s.status !== statusFilter) return false;
     if (roleFilter !== "all" && s.role !== roleFilter) return false;
     if (dateFilter) {
-      const sDate = new Date(s.scheduled_time || s.created_at).toISOString().split("T")[0];
+      const sDate = new Date(s.scheduled_time || s.created_at)
+        .toISOString()
+        .split("T")[0];
       if (sDate !== dateFilter) return false;
     }
     return true;
@@ -93,14 +122,30 @@ export default function Interviews({ onViewReport }) {
     <div className="page">
       <div className="flex-between" style={{ marginBottom: 20 }}>
         <div>
-          <h1 className="page-title" style={{ margin: 0 }}>Interviews</h1>
-          <p className="text-secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 14 }}>Track and monitor all scheduled and completed AI interviews.</p>
+          <h1 className="page-title" style={{ margin: 0 }}>
+            Interviews
+          </h1>
+          <p
+            className="text-secondary"
+            style={{ marginTop: 4, marginBottom: 0, fontSize: 14 }}
+          >
+            Track and monitor all scheduled and completed AI interviews.
+          </p>
         </div>
-        <div className="text-secondary font-semibold">Total: {sessions.length}</div>
+        <div className="text-secondary font-semibold">
+          Total: {sessions.length}
+        </div>
       </div>
 
       <div className="card" style={{ padding: "10px 14px", marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -129,7 +174,12 @@ export default function Interviews({ onViewReport }) {
             type="date"
             value={dateFilter}
             onChange={(e) => setDateFilter(e.target.value)}
-            style={{ height: 34, flex: "1 1 150px", width: "auto", padding: "0 10px" }}
+            style={{
+              height: 34,
+              flex: "1 1 150px",
+              width: "auto",
+              padding: "0 10px",
+            }}
           />
           {(statusFilter !== "all" || roleFilter !== "all" || dateFilter) && (
             <button
@@ -149,9 +199,15 @@ export default function Interviews({ onViewReport }) {
       <div className="card">
         <div style={{ padding: 0 }}>
           {filteredSessions.length === 0 ? (
-             <div style={{ padding: 32, textAlign: "center", color: "var(--text-secondary)" }}>
-               No interviews match the filters.
-             </div>
+            <div
+              style={{
+                padding: 32,
+                textAlign: "center",
+                color: "var(--text-secondary)",
+              }}
+            >
+              No interviews match the filters.
+            </div>
           ) : (
             <table>
               <thead>
@@ -170,10 +226,16 @@ export default function Interviews({ onViewReport }) {
                   <tr key={s.id}>
                     <td>
                       <div className="font-semibold">{s.candidate_name}</div>
-                      <div className="text-secondary text-sm">{s.candidate_email}</div>
+                      <div className="text-secondary text-sm">
+                        {s.candidate_email}
+                      </div>
                     </td>
-                    <td><span className="text-secondary">{s.role || "—"}</span></td>
-                    <td><span className="text-secondary">{s.analysis?.detectedLevel || "—"}</span></td>
+                    <td>
+                      <span className="text-secondary">{s.role || "—"}</span>
+                    </td>
+                    <td>
+                      <span className="text-secondary">{s.analysis?.detectedLevel || "—"}</span>
+                    </td>
                     <td className="text-secondary text-sm">
                       {formatDateIST(s.scheduled_time || s.created_at)}
                     </td>
@@ -184,7 +246,16 @@ export default function Interviews({ onViewReport }) {
                     </td>
                     <td>
                       {s.meeting_url ? (
-                        <a href={s.meeting_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", textDecoration: "underline", fontSize: 13 }}>
+                        <a
+                          href={s.meeting_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            color: "var(--primary)",
+                            textDecoration: "underline",
+                            fontSize: 13,
+                          }}
+                        >
                           Link
                         </a>
                       ) : (
@@ -193,15 +264,20 @@ export default function Interviews({ onViewReport }) {
                     </td>
                     <td>
                       {s.status === "completed" ? (
-                        <button 
-                          className="btn-ghost btn-sm" 
+                        <button
+                          className="btn-ghost btn-sm"
                           onClick={() => onViewReport(s.session_id || s.id)}
-                          style={{ color: "var(--primary)", borderColor: "var(--primary)" }}
+                          style={{
+                            color: "var(--primary)",
+                            borderColor: "var(--primary)",
+                          }}
                         >
                           View Report
                         </button>
                       ) : (
-                        <span className="text-secondary text-xs">Waiting...</span>
+                        <span className="text-secondary text-xs">
+                          Waiting...
+                        </span>
                       )}
                     </td>
                   </tr>
