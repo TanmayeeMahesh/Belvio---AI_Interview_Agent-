@@ -251,14 +251,6 @@ def _scan_video(cv2, np, ort, path):
     last_phone_t = -_PHONE_SEC
     _MIN = {"no_face": _NOFACE_MIN_SEC, "second_person": _2P_MIN_SEC, "different_person": _DP_MIN_SEC}
 
-    def _largest_face(faces):
-        best, area = None, -1.0
-        for row in faces:
-            a = float(row[2]) * float(row[3])
-            if a > area:
-                area, best = a, row
-        return best
-
     def _close_run(kind, end_at):
         nonlocal embedded
         st = run[kind]
@@ -319,30 +311,31 @@ def _scan_video(cv2, np, ort, path):
         else:
             _close_run("second_person", at)
 
-        # ── same-person (SFace) on the primary (largest) face ──
-        primary = _largest_face(faces) if n_faces >= 1 else None
-        if primary is not None:
-            centers.append(((float(primary[0]) + float(primary[2]) / 2) / frame.shape[1],
-                            (float(primary[1]) + float(primary[3]) / 2) / frame.shape[0]))
-        if recog is not None and primary is not None:
-            try:
-                feat = recog.feature(recog.alignCrop(frame, primary))
-                if ref_feat is None:
-                    if n_faces == 1:               # enroll only from a clean single-face frame
-                        ref_feat = feat
-                else:
-                    sim = recog.match(ref_feat, feat, cv2.FaceRecognizerSF_FR_COSINE)
-                    min_sim = sim if min_sim is None else min(min_sim, sim)
-                    if sim < _SFACE_COS:
-                        pb = [(int(primary[0]), int(primary[1]), int(primary[0] + primary[2]),
-                               int(primary[1] + primary[3]), "different")]
-                        _open_or_extend("different_person", at, frame, pb)
-                    else:
+        # ── same-person (SFace) — ONLY on unambiguous single-face frames, so min_similarity and the
+        #    different_person signal reflect the candidate (2-face frames are handled by second_person) ──
+        if n_faces == 1:
+            face = faces[0]
+            centers.append(((float(face[0]) + float(face[2]) / 2) / frame.shape[1],
+                            (float(face[1]) + float(face[3]) / 2) / frame.shape[0]))
+            if recog is not None:
+                try:
+                    feat = recog.feature(recog.alignCrop(frame, face))
+                    if ref_feat is None:
+                        ref_feat = feat            # enroll from the first clean single-face frame
                         _close_run("different_person", at)
-            except Exception:
-                pass                                # alignment/feature can fail on odd crops — skip frame
+                    else:
+                        sim = recog.match(ref_feat, feat, cv2.FaceRecognizerSF_FR_COSINE)
+                        min_sim = sim if min_sim is None else min(min_sim, sim)
+                        if sim < _SFACE_COS:
+                            pb = [(int(face[0]), int(face[1]), int(face[0] + face[2]),
+                                   int(face[1] + face[3]), "different")]
+                            _open_or_extend("different_person", at, frame, pb)
+                        else:
+                            _close_run("different_person", at)
+                except Exception:
+                    pass                            # alignment/feature can fail on odd crops — skip frame
         else:
-            _close_run("different_person", at)
+            _close_run("different_person", at)      # 0 or ≥2 faces → can't assert same-person here
 
         # ── phone (YOLOX) — periodic, plus whenever the face is missing (look-away/look-down) ──
         if yolox is not None and ((at - last_phone_t) >= _PHONE_SEC or n_faces == 0):
