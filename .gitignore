@@ -14,6 +14,7 @@ __pycache__/
 *.pyd
 .Python
 flan_t5_finetuned_local_save/
+flan_t5_finetuned_frozen_encoder_local_save/
 *.zip
 *.safetensors
 

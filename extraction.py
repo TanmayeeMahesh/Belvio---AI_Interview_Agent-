@@ -62,7 +62,8 @@ Return EXACTLY this JSON (no deviations):
   "technicalStack": ["..."],
   "missingSkills": ["skills in the JD weak/absent in the resume"],
   "jdMatchScore": 0,
-  "analysisSummary": "2-3 sentence briefing for the interviewer agent"
+  "analysisSummary": "2-3 sentence briefing for the interviewer agent",
+  "gapAnalysisText": "1-2 short sentences explicitly stating what key skills from the JD the candidate lacks."
 }}"""
     result = llm_stack.call_json(system, user, job="parsing", max_tokens=1200, keys=keys)
     if not result:
@@ -70,7 +71,7 @@ Return EXACTLY this JSON (no deviations):
         return {"candidateName": "Candidate", "candidateEmail": None, "jobRole": role,
                 "detectedLevel": "fresher", "levelReason": "", "yearsExperience": 0,
                 "skills": [], "technicalStack": [], "missingSkills": [], "jdMatchScore": 0,
-                "analysisSummary": ""}
+                "analysisSummary": "", "gapAnalysisText": "No significant skill gaps identified."}
     return result
 
 
@@ -85,7 +86,7 @@ def _load_gap_model():
     if _gap_model is None:
         try:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-            model_dir = "flan_t5_finetuned_local_save"
+            model_dir = "flan_t5_finetuned_frozen_encoder_local_save"
             _gap_tokenizer = AutoTokenizer.from_pretrained(model_dir)
             _gap_model = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
         except Exception as e:
@@ -148,7 +149,7 @@ def parse_question_bank(job_role: str, level: str) -> list:
     return questions[:5]
 
 
-def generate_gap_questions(jd_text: str, resume_text: str) -> list:
+def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str, resume_text: str) -> list:
     _load_gap_model()
     if not _gap_model or not _gap_tokenizer:
         return []
@@ -157,7 +158,7 @@ def generate_gap_questions(jd_text: str, resume_text: str) -> list:
         # We skip the first 200 characters of the resume to bypass the contact info (Name, Email, Phone) 
         # which confuses the model into thinking it's a job title. We also add an instruction.
         clean_resume = resume_text[200:1200] if len(resume_text) > 200 else resume_text
-        prompt = f"Generate interview questions about the candidate's missing skills based on the JD. JD: {jd_text[:1000]} Resume: {clean_resume}"
+        prompt = f"Generate interview questions targeting the candidate's skill gaps.\nJob Title: {job_title}\nGap Analysis: {gap_analysis_text}\nJD: {jd_text[:1000]}\nResume: {clean_resume}"
         inputs = _gap_tokenizer(prompt, return_tensors="pt")
         outputs = _gap_model.generate(**inputs, max_new_tokens=150)
         text = _gap_tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -210,7 +211,12 @@ def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", 
     questions.extend(bank_questions)
     
     if jd_text and resume_text:
-        gap_questions = generate_gap_questions(jd_text, resume_text)
+        gap_analysis_text = analysis.get("gapAnalysisText", "")
+        if not gap_analysis_text:
+            missing_skills = analysis.get("missingSkills", [])
+            gap_analysis_text = f"Candidate lacks experience with {', '.join(missing_skills)}." if missing_skills else "No major skill gaps identified."
+        
+        gap_questions = generate_gap_questions(role, gap_analysis_text, jd_text, resume_text)
         questions.extend(gap_questions)
         
     questions.append({
