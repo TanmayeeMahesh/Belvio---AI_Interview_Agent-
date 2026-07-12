@@ -10,7 +10,7 @@ Pipeline:
 
 Prompt design adapted from the other team's claude.py; routed through our llm_stack (Gemini→Claude→Groq).
 """
-import os, json, logging
+import os, json, logging, math
 from pypdf import PdfReader
 import llm_stack
 
@@ -92,7 +92,7 @@ def _load_gap_model():
         except Exception as e:
             logger.error(f"Failed to load local GAP model: {e}")
 
-def parse_question_bank(job_role: str, level: str) -> list:
+def parse_question_bank(job_role: str, level: str, num_questions: int) -> list:
     level_map = {
         "fresher": ["Fresher (0–1 year of experience)"],
         "intermediate": ["Experienced (1–3 years of experience)", "Experienced (3–5 years of experience)"],
@@ -146,10 +146,10 @@ def parse_question_bank(job_role: str, level: str) -> list:
                 "key_concepts": [topic]
             })
             
-    return questions[:5]
+    return questions[:num_questions]
 
 
-def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str, resume_text: str) -> list:
+def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str, resume_text: str, num_questions: int) -> list:
     _load_gap_model()
     if not _gap_model or not _gap_tokenizer:
         return []
@@ -160,14 +160,14 @@ def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str,
         clean_resume = resume_text[200:1200] if len(resume_text) > 200 else resume_text
         prompt = f"Generate interview questions targeting the candidate's skill gaps.\nJob Title: {job_title}\nGap Analysis: {gap_analysis_text}\nJD: {jd_text[:1000]}\nResume: {clean_resume}"
         inputs = _gap_tokenizer(prompt, return_tensors="pt")
-        outputs = _gap_model.generate(**inputs, max_new_tokens=150)
+        outputs = _gap_model.generate(**inputs, max_new_tokens=100 * num_questions)
         text = _gap_tokenizer.decode(outputs[0], skip_special_tokens=True)
         
         # Split the text by numbers followed by a dot or parenthesis, e.g., ' 2) ' or ' 2. ' or '^1) '
         parts = re.split(r'(?:^|\s+)\d+[\.\)]\s*', text)
         clean_lines = [p.strip() for p in parts if p.strip()]
-        # Just grab the first two lines that seem like reasonable questions/statements
-        questions_text = [q for q in clean_lines if len(q) > 10][:2]
+        # Just grab up to num_questions that seem like reasonable questions/statements
+        questions_text = [q for q in clean_lines if len(q) > 10][:num_questions]
         
         gap_questions = []
         for q_text in questions_text:
@@ -184,12 +184,16 @@ def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str,
         logger.error(f"Failed to generate gap questions: {e}")
         return []
 
-def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", resume_text: str = "") -> list:
+def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", resume_text: str = "", total_questions: int = 10) -> list:
     role = role or analysis.get("jobRole", "Software Engineer")
     level = analysis.get("detectedLevel", "fresher")
 
+    gap_count = math.floor(0.2 * total_questions)
+    tech_count = math.floor(0.5 * total_questions)
+    
     questions = []
     
+    # 1. Opening Questions (Always 2)
     questions.append({
         "question": "To begin, could you please introduce yourself? Feel free to walk us through your educational background, professional experience, and anything else you'd like us to know.",
         "topic": "Introduction",
@@ -199,26 +203,30 @@ def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", 
         "key_concepts": ["introduction", "background"]
     })
     questions.append({
-        "question": "Could you tell us about a project you've worked on that you're particularly proud of? Please describe the problem you were solving, your specific role and contributions, the tools or technologies you used, and the final outcome or impact.",
-        "topic": "Projects",
+        "question": "Could you tell us about a project you've worked on that you're particularly proud of? Please describe the problem you were solving, your specific role and contributions, the tools or technologies you used, and the final outcome or impact." if level == "fresher" else "Could you walk us through your core responsibilities in your most recent role, particularly highlighting a challenging problem you successfully resolved?",
+        "topic": "Projects" if level == "fresher" else "Responsibilities",
         "question_type": "behavioral",
         "depth": "medium",
         "target_skill": "experience",
         "key_concepts": ["project", "impact", "tools"]
     })
     
-    bank_questions = parse_question_bank(role, level)
-    questions.extend(bank_questions)
+    # 2. Technical Questions (50%)
+    if tech_count > 0:
+        bank_questions = parse_question_bank(role, level, tech_count)
+        questions.extend(bank_questions)
     
-    if jd_text and resume_text:
+    # 3. Gap Questions (20%)
+    if jd_text and resume_text and gap_count > 0:
         gap_analysis_text = analysis.get("gapAnalysisText", "")
         if not gap_analysis_text:
             missing_skills = analysis.get("missingSkills", [])
             gap_analysis_text = f"Candidate lacks experience with {', '.join(missing_skills)}." if missing_skills else "No major skill gaps identified."
         
-        gap_questions = generate_gap_questions(role, gap_analysis_text, jd_text, resume_text)
+        gap_questions = generate_gap_questions(role, gap_analysis_text, jd_text, resume_text, gap_count)
         questions.extend(gap_questions)
         
+    # 4. Closing Questions (Always 2)
     questions.append({
         "question": "As we wrap up, where do you see yourself professionally over the next five years, and how do you feel this role would fit into that journey?",
         "topic": "Career Goals",
