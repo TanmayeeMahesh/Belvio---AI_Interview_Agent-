@@ -112,7 +112,7 @@ async def schedule(request: Request, authorization: str = Header(None)):
     try:
         jd_text = temp.get("jd_text", "")
         resume_text = temp.get("resume_text", "")
-        questions = extraction.generate_question_plan(analysis, role, jd_text=jd_text, resume_text=resume_text)
+        questions = extraction.generate_question_plan(analysis, role, jd_text=jd_text, resume_text=resume_text, total_questions=qcount)
     except extraction.llm_stack.LLMExhausted as e:
         raise HTTPException(status_code=429,
                             detail={"error": "llm_exhausted", "providers": e.providers_tried})
