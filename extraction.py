@@ -120,7 +120,7 @@ def parse_question_bank(job_role: str, level: str, num_questions: int) -> list:
         best_role_chunk = roles[1] if len(roles) > 1 else ""
 
     categories = re.split(r'\n###\s+', best_role_chunk)
-    questions = []
+    category_lists = []
 
     for cat_chunk in categories[1:]:
         lines = cat_chunk.split('\n')
@@ -134,19 +134,31 @@ def parse_question_bank(job_role: str, level: str, num_questions: int) -> list:
                 current_level_match = any(t in level_title for t in target_levels)
             elif current_level_match and re.match(r'^\d+\.\s+', line):
                 q_text = re.sub(r'^\d+\.\s+', '', line).strip()
-                cat_q.append(q_text)
+                cat_q.append({
+                    "question": q_text,
+                    "topic": topic,
+                    "question_type": "technical",
+                    "depth": "medium" if level == "intermediate" else ("surface" if level == "fresher" else "deep"),
+                    "target_skill": topic,
+                    "key_concepts": [topic]
+                })
                 
         if cat_q:
-            questions.append({
-                "question": cat_q[0],
-                "topic": topic,
-                "question_type": "technical",
-                "depth": "medium" if level == "intermediate" else ("surface" if level == "fresher" else "deep"),
-                "target_skill": topic,
-                "key_concepts": [topic]
-            })
+            category_lists.append(cat_q)
             
-    return questions[:num_questions]
+    questions = []
+    # Round-robin selection to mix topics evenly
+    # (e.g. 1 from Core Concepts, 1 from Tools, etc. before taking a 2nd from Core Concepts)
+    while True:
+        added_in_round = 0
+        for cat in category_lists:
+            if cat and len(questions) < num_questions:
+                questions.append(cat.pop(0))
+                added_in_round += 1
+        if added_in_round == 0 or len(questions) >= num_questions:
+            break
+            
+    return questions
 
 
 def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str, resume_text: str, num_questions: int) -> list:
@@ -158,7 +170,7 @@ def generate_gap_questions(job_title: str, gap_analysis_text: str, jd_text: str,
         # We skip the first 200 characters of the resume to bypass the contact info (Name, Email, Phone) 
         # which confuses the model into thinking it's a job title. We also add an instruction.
         clean_resume = resume_text[200:1200] if len(resume_text) > 200 else resume_text
-        prompt = f"Generate interview questions targeting the candidate's skill gaps.\nJob Title: {job_title}\nGap Analysis: {gap_analysis_text}\nJD: {jd_text[:1000]}\nResume: {clean_resume}"
+        prompt = f"Generate {num_questions} interview questions targeting the candidate's skill gaps.\nJob Title: {job_title}\nGap Analysis: {gap_analysis_text}\nJD: {jd_text[:1000]}\nResume: {clean_resume}"
         inputs = _gap_tokenizer(prompt, return_tensors="pt")
         outputs = _gap_model.generate(**inputs, max_new_tokens=100 * num_questions)
         text = _gap_tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -188,35 +200,56 @@ def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", 
     role = role or analysis.get("jobRole", "Software Engineer")
     level = analysis.get("detectedLevel", "fresher")
 
+    intro_count = math.floor(0.3 * total_questions)
     gap_count = math.floor(0.2 * total_questions)
-    tech_count = math.floor(0.5 * total_questions)
     
     questions = []
     
-    # 1. Opening Questions (Always 2)
-    questions.append({
-        "question": "To begin, could you please introduce yourself? Feel free to walk us through your educational background, professional experience, and anything else you'd like us to know.",
-        "topic": "Introduction",
-        "question_type": "introduction",
-        "depth": "surface",
-        "target_skill": "communication",
-        "key_concepts": ["introduction", "background"]
-    })
-    questions.append({
-        "question": "Could you tell us about a project you've worked on that you're particularly proud of? Please describe the problem you were solving, your specific role and contributions, the tools or technologies you used, and the final outcome or impact." if level == "fresher" else "Could you walk us through your core responsibilities in your most recent role, particularly highlighting a challenging problem you successfully resolved?",
-        "topic": "Projects" if level == "fresher" else "Responsibilities",
-        "question_type": "behavioral",
-        "depth": "medium",
-        "target_skill": "experience",
-        "key_concepts": ["project", "impact", "tools"]
-    })
+    intro_pool = [
+        {
+            "question": "To begin, could you please introduce yourself? Feel free to walk us through your educational background, professional experience, and anything else you'd like us to know.",
+            "topic": "Introduction",
+            "question_type": "introduction",
+            "depth": "surface",
+            "target_skill": "communication",
+            "key_concepts": ["introduction", "background"]
+        },
+        {
+            "question": "Could you tell us about a project you've worked on that you're particularly proud of? Please describe the problem you were solving, your specific role and contributions, the tools or technologies you used, and the final outcome or impact." if level == "fresher" else "Could you walk us through your core responsibilities in your most recent role, particularly highlighting a challenging problem you successfully resolved?",
+            "topic": "Projects" if level == "fresher" else "Responsibilities",
+            "question_type": "behavioral",
+            "depth": "medium",
+            "target_skill": "experience",
+            "key_concepts": ["project", "impact", "tools"]
+        },
+        {
+            "question": "As we wrap up, where do you see yourself professionally over the next five years, and how do you feel this role would fit into that journey?",
+            "topic": "Career Goals",
+            "question_type": "closing",
+            "depth": "medium",
+            "target_skill": "motivation",
+            "key_concepts": ["future", "goals"]
+        },
+        {
+            "question": "Finally, do you have any questions for us — about the role, the team, the company, or anything else you'd like to know before we conclude the interview?",
+            "topic": "Candidate Questions",
+            "question_type": "closing",
+            "depth": "surface",
+            "target_skill": "curiosity",
+            "key_concepts": ["questions"]
+        }
+    ]
     
-    # 2. Technical Questions (50%)
-    if tech_count > 0:
-        bank_questions = parse_question_bank(role, level, tech_count)
-        questions.extend(bank_questions)
+    # Determine how many opening vs closing questions to add from the pool
+    opening_to_add = min(2, intro_count)
+    closing_to_add = min(2, max(0, intro_count - opening_to_add))
     
-    # 3. Gap Questions (20%)
+    # 1. Opening Questions
+    for i in range(opening_to_add):
+        questions.append(intro_pool[i])
+        
+    # 2. Gap Questions (20%)
+    gap_questions = []
     if jd_text and resume_text and gap_count > 0:
         gap_analysis_text = analysis.get("gapAnalysisText", "")
         if not gap_analysis_text:
@@ -224,24 +257,20 @@ def generate_question_plan(analysis: dict, role: str = None, jd_text: str = "", 
             gap_analysis_text = f"Candidate lacks experience with {', '.join(missing_skills)}." if missing_skills else "No major skill gaps identified."
         
         gap_questions = generate_gap_questions(role, gap_analysis_text, jd_text, resume_text, gap_count)
-        questions.extend(gap_questions)
         
-    # 4. Closing Questions (Always 2)
-    questions.append({
-        "question": "As we wrap up, where do you see yourself professionally over the next five years, and how do you feel this role would fit into that journey?",
-        "topic": "Career Goals",
-        "question_type": "closing",
-        "depth": "medium",
-        "target_skill": "motivation",
-        "key_concepts": ["future", "goals"]
-    })
-    questions.append({
-        "question": "Finally, do you have any questions for us — about the role, the team, the company, or anything else you'd like to know before we conclude the interview?",
-        "topic": "Candidate Questions",
-        "question_type": "closing",
-        "depth": "surface",
-        "target_skill": "curiosity",
-        "key_concepts": ["questions"]
-    })
+    actual_gap_count = len(gap_questions)
+    
+    # 3. Technical Questions (Remaining questions to reach total perfectly)
+    tech_count = total_questions - (intro_count + actual_gap_count)
+    if tech_count > 0:
+        bank_questions = parse_question_bank(role, level, tech_count)
+        questions.extend(bank_questions)
+        
+    # Append gap questions AFTER technical questions
+    questions.extend(gap_questions)
+        
+    # 4. Closing Questions
+    for i in range(closing_to_add):
+        questions.append(intro_pool[2 + i])
     
     return questions
