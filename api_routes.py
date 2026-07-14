@@ -54,6 +54,29 @@ def _require_user(authorization):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+def _sanitize_questions(raw):
+    """Normalise an HR-reviewed question list (LLM items keep their fields; HR-added items get
+    sensible defaults) into the shape db.save_questions / the interview engine expect."""
+    clean = []
+    for q in (raw or []):
+        if isinstance(q, str):
+            q = {"question": q}
+        if not isinstance(q, dict):
+            continue
+        text = (q.get("question") or "").strip()
+        if not text:
+            continue
+        clean.append({
+            "question": text,
+            "topic": q.get("topic") or "Custom (HR)",
+            "question_type": q.get("question_type") or "custom",
+            "depth": q.get("depth") or "medium",
+            "target_skill": q.get("target_skill") or "",
+            "key_concepts": q.get("key_concepts") or [],
+        })
+    return clean
+
+
 # ─── US-AG-01: upload + parse JD/resume ───────────────────
 @router.post("/api/analyse")
 async def analyse(resume: UploadFile = File(None), jd: UploadFile = File(None),
@@ -89,6 +112,25 @@ async def analyse(resume: UploadFile = File(None), jd: UploadFile = File(None),
     return {"analysis": analysis, "tempFiles": temp}
 
 
+# ─── US-AG-02 preview: generate the question plan for HR review (no DB writes) ──
+@router.post("/api/generate-questions")
+async def generate_questions(request: Request, authorization: str = Header(None)):
+    """Return the LLM question plan so HR can review/edit it BEFORE the interview is scheduled.
+    Stateless — nothing is persisted until /api/schedule is called with the confirmed plan."""
+    user = _require_user(authorization)
+    keys = auth.get_user_keys_decrypted(auth.user_id_from(user))
+    body = await request.json()
+    analysis = body.get("analysis", {})
+    role     = body.get("role") or analysis.get("jobRole", "Software Engineer")
+    qcount   = int(body.get("questionCount", 12))
+    try:
+        questions = extraction.generate_question_plan(analysis, role, qcount, keys=keys)
+    except extraction.llm_stack.LLMExhausted as e:
+        raise HTTPException(status_code=429,
+                            detail={"error": "llm_exhausted", "providers": e.providers_tried})
+    return {"questions": questions}
+
+
 # ─── US-AG-02 + scheduling: generate questions, store, email, schedule bot ──
 @router.post("/api/schedule")
 async def schedule(request: Request, authorization: str = Header(None)):
@@ -108,12 +150,14 @@ async def schedule(request: Request, authorization: str = Header(None)):
     if not meeting_url:
         raise HTTPException(status_code=400, detail="A meeting link is required.")
 
-    # 1. generate the dynamic question plan (US-AG-02)
-    try:
-        questions = extraction.generate_question_plan(analysis, role, qcount, keys=keys)
-    except extraction.llm_stack.LLMExhausted as e:
-        raise HTTPException(status_code=429,
-                            detail={"error": "llm_exhausted", "providers": e.providers_tried})
+    # 1. use the HR-reviewed plan if provided, else generate one (backward-compatible)
+    questions = _sanitize_questions(body.get("questions"))
+    if not questions:
+        try:
+            questions = extraction.generate_question_plan(analysis, role, qcount, keys=keys)
+        except extraction.llm_stack.LLMExhausted as e:
+            raise HTTPException(status_code=429,
+                                detail={"error": "llm_exhausted", "providers": e.providers_tried})
 
     # 2. create candidate + session in OUR Supabase, store analysis + questions
     candidate_name  = analysis.get("candidateName", "Candidate")
@@ -134,7 +178,8 @@ async def schedule(request: Request, authorization: str = Header(None)):
         session_id=session_id)
 
     # 4. email the invite now
-    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    IST = timezone(timedelta(hours=5, minutes=30))   # India Standard Time (no DST → fixed offset)
+    when_human = scheduled_for.astimezone(IST).strftime("%Y-%m-%d %H:%M") + " IST"
     email_ok = scheduler.send_invite(email, candidate_name, meeting_url, role=role, when=when_human) if email else False
 
     return {"status": "scheduled", "session_id": session_id,
@@ -157,6 +202,17 @@ def hr_session(session_id: str, authorization: str = Header(None)):
 def hr_report(session_id: str, authorization: str = Header(None)):
     _require_user(authorization)
     return db.get_report(session_id)
+
+@router.post("/api/hr/session/{session_id}/analyze-integrity")
+def hr_analyze_integrity(session_id: str, authorization: str = Header(None)):
+    """Run (or re-run) integrity analysis for a session on demand — handy for local testing on an
+    existing transcript without conducting a fresh interview. Runs in the background; returns immediately."""
+    _require_user(authorization)
+    import proctor, threading
+    bot_id = db.get_bot_id_for_session(session_id)   # so a manual re-run can also test video analysis
+    threading.Thread(target=proctor.analyze_session, args=(session_id, bot_id), daemon=True).start()
+    return {"status": "started", "session_id": session_id, "bot_id": bot_id}
+
 
 @router.get("/api/hr/session/{session_id}/recording")
 def hr_recording_url(session_id: str, authorization: str = Header(None)):

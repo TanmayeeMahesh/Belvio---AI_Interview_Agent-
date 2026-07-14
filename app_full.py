@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 import db          # Supabase persistence (fail-safe)
 import evaluator   # final scoring + report (US-AG-07/08)
 import scheduler   # email invite + (optional) meeting creation
+import proctor     # post-interview integrity analysis (fail-safe, background)
 
 load_dotenv()
 app = FastAPI(title="AI Interview Bot")
@@ -42,6 +43,9 @@ SARVAM_MODEL   = os.getenv("SARVAM_MODEL", "bulbul:v2")    # documented; v2 defa
 SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "anushka")
 SARVAM_LANG    = os.getenv("SARVAM_LANG", "en-IN")
 
+# ─── Proctoring (post-interview integrity). Instant off-switch: PROCTORING_ENABLED=false ──
+PROCTORING_ENABLED = os.getenv("PROCTORING_ENABLED", "true").lower() == "true"
+
 BOT_NAME    = "AI Interviewer (Sandbox)"
 RECALL_BASE = f"https://{os.getenv('RECALL_REGION', 'ap-northeast-1')}.recall.ai/api/v1"
 GATE_MODEL  = "llama-3.1-8b-instant"
@@ -50,9 +54,13 @@ REPLY_MODEL = "llama-3.1-8b-instant"
 FOLLOWUPS_PER_Q    = 1
 SILENCE_GATE       = 2.0
 MAX_TURN_WAIT      = 12.0
-NO_SHOW_TIMEOUT    = 300
-SILENCE_END_SEC    = 180
-MAX_INTERVIEW_SEC  = 45 * 60
+# Timeouts — env-tunable. The first two directly control Recall bot-runtime COST (the bot is billed
+# the whole time it waits in the lobby / for consent), so keep them tight for no-shows.
+WAITING_ROOM_TIMEOUT = int(os.getenv("WAITING_ROOM_TIMEOUT", "180"))   # leave lobby if not admitted (was 600)
+NO_SHOW_TIMEOUT      = int(os.getenv("NO_SHOW_TIMEOUT", "120"))        # leave if no consent after admission (was 300)
+SILENCE_END_SEC      = int(os.getenv("SILENCE_END_SEC", "180"))        # end interview after this much silence
+MAX_INTERVIEW_SEC    = int(os.getenv("MAX_INTERVIEW_SEC", str(45 * 60)))
+SCHEDULED_EXPIRY_MIN = int(os.getenv("SCHEDULED_EXPIRY_MIN", "30"))    # scheduled→no_show if never joined
 TTS_WPS            = 2.6
 
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -215,17 +223,24 @@ def _find_download_url(obj):
                 return found
     return None
 
-def get_fresh_recording_url(bot_id):
-    """Re-fetch a CURRENT pre-signed recording URL from Recall on demand.
-    Recall's download URLs expire in hours, so we never reuse a cached one — we ask for a fresh
-    link each time the dashboard wants to play/download the recording."""
+def get_fresh_recording_url(bot_id, kind="audio"):
+    """Re-fetch a CURRENT pre-signed recording URL from Recall on demand (they expire in hours).
+    kind: "audio" → the mixed-audio track (report player); "video" → the mixed-video track (proctoring).
+    Prefers a media_shortcut whose key matches `kind`; falls back to any available download URL."""
     if not bot_id:
         return None
     try:
         r = requests.get(f"{RECALL_BASE}/bot/{bot_id}/", headers=recall_headers())
         if r.status_code == 200:
             for rec in r.json().get("recordings", []):
-                url = _find_download_url(rec)
+                shortcuts = rec.get("media_shortcuts") or {}
+                # prefer the track matching the requested kind (e.g. "video_mixed" for kind="video")
+                for key, node in shortcuts.items():
+                    if kind in key:
+                        url = ((node or {}).get("data") or {}).get("download_url")
+                        if url:
+                            return url
+                url = _find_download_url(rec)   # fallback: any download_url
                 if url:
                     return url
         else:
@@ -270,12 +285,13 @@ def fetch_and_save_recording(bot_id, session_id):
     print("⚠️ recording URL not available after 10 min of retries")
 
 def wait_for_join_and_speak(sess: Session, intro: str):
-    print(f"⏳ Polling bot {sess.bot_id[:8]} for admission (up to 5 min)...")
-    for i in range(150):
+    polls = max(30, WAITING_ROOM_TIMEOUT // 2)   # 2s per poll; matches the lobby timeout
+    print(f"⏳ Polling bot {sess.bot_id[:8]} for admission (up to {WAITING_ROOM_TIMEOUT // 60} min)...")
+    for i in range(polls):
         time.sleep(2)
         status = get_bot_status(sess.bot_id)
         if i < 5 or i % 15 == 14:   # log first 5 + every 30s after
-            print(f"   [{sess.bot_id[:8]}] [{i+1}/150] status = '{status}'")
+            print(f"   [{sess.bot_id[:8]}] [{i+1}/{polls}] status = '{status}'")
         if status in ("in_call_recording", "in_call_not_recording"):
             print(f"🎉 [{sess.bot_id[:8]}] admitted — speaking intro")
             sess.join_time = time.time()
@@ -286,7 +302,7 @@ def wait_for_join_and_speak(sess: Session, intro: str):
             return
         if status in ("done", "error", "fatal", "call_ended"):
             print(f"❌ [{sess.bot_id[:8]}] ended early: {status}"); return
-    print(f"❌ [{sess.bot_id[:8]}] 5-min timeout — never reached in_call (late-join via webhook now active)")
+    print(f"❌ [{sess.bot_id[:8]}] admission timeout — never reached in_call (late-join via webhook now active)")
 
 
 # ─── WATCHDOGS (per session) ──────────────────────────────
@@ -344,6 +360,8 @@ def end_session(sess: Session, closing_text: str):
         threading.Thread(target=evaluator.evaluate_session,
                          args=(sid, sess.completion_status), daemon=True).start()
         threading.Thread(target=fetch_and_save_recording, args=(sess.bot_id, sid), daemon=True).start()
+        if PROCTORING_ENABLED:
+            threading.Thread(target=proctor.analyze_session, args=(sid, sess.bot_id), daemon=True).start()
     # keep routing_key → session_id so recording.done (fires minutes later) can still find it
     if sess.routing_key and sid:
         COMPLETED[sess.routing_key] = sid
@@ -712,7 +730,8 @@ def scheduler_worker():
         time.sleep(SCHEDULER_POLL_SEC)
 
 def stuck_session_cleaner():
-    """Every 10 min: find sessions stuck in_progress for >2 hours and close them."""
+    """Every 10 min: close sessions stuck in_progress >2h (→ stopped), and expire scheduled
+    sessions the candidate never joined (→ no_show)."""
     time.sleep(300)  # wait 5 min after startup before first check
     while True:
         try:
@@ -736,6 +755,11 @@ def stuck_session_cleaner():
                     db.close_session(sid, "stopped", row.get("questions_reached") or 0)
                     threading.Thread(target=evaluator.evaluate_session, args=(sid, "stopped"), daemon=True).start()
                     print(f"🔧 Stuck session cleaner: closed {sid[:8]} (bot {stuck_bot_id[:8] if stuck_bot_id else '?'})")
+            # scheduled sessions the candidate never joined → mark no_show (closes the 'scheduled forever' gap)
+            for row in db.list_stale_scheduled_sessions(older_than_minutes=SCHEDULED_EXPIRY_MIN):
+                sid = row["id"]
+                db.close_session(sid, "no_show", 0)
+                print(f"🔧 Scheduled expiry: {sid[:8]} never joined → no_show")
         except Exception as e:
             print(f"❌ stuck_session_cleaner: {e}")
         time.sleep(600)  # check every 10 min
@@ -758,7 +782,8 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
     payload = {
         "bot_name": BOT_NAME, "meeting_url": meeting_url,
         "recording_config": {
-            "audio_mixed_mp4": {},   # both bot TTS + candidate voice, audio-only (US-AG-06)
+            "audio_mixed_mp4": {},   # both bot TTS + candidate voice (used for the report's player)
+            "video_mixed_mp4": {},   # candidate video — sampled post-interview for proctoring (Mode A)
             # force the bot's own output_audio into the mix (bypasses platform echo cancellation,
             # which otherwise leaves only the candidate's voice in the recording). Default is false.
             "include_bot_in_recording": {"audio": True},
@@ -769,7 +794,7 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
                 "url": f"{NGROK_URL}/webhook/transcription/{routing_key}",
                 "events": ["transcript.data", "transcript.partial_data"]}]
         },
-        "automatic_leave": {"waiting_room_timeout": 600,
+        "automatic_leave": {"waiting_room_timeout": WAITING_ROOM_TIMEOUT,
                             "in_call_not_recording_timeout": 3600,
                             "silence_detection": {"timeout": 3600}}
     }
@@ -833,7 +858,7 @@ async def schedule_interview(request: Request):
     if not meeting_url:
         return {"status": "error", "detail": "meeting_url is required"}
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay)
-    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    when_human = scheduled_for.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M") + " IST"
     row = db.create_scheduled_interview(meeting_url=meeting_url,
         scheduled_for_iso=scheduled_for.isoformat(), candidate_email=email or None,
         candidate_name=name or None, role=role or None)
@@ -958,8 +983,19 @@ async def handle_transcription(request: Request, background_tasks: BackgroundTas
         no_words  = ["no", "don't", "stop", "refuse"]
         yes_words = ["yes", "sure", "okay", "ok", "proceed", "agree", "yeah", "yep", "consent"]
         if any(w in text.lower() for w in no_words):
-            background_tasks.add_task(speak, sess, "Understood. Interview cancelled. Thank you.")
+            # candidate explicitly declined consent → close immediately as 'declined' (distinct status)
+            sess.interview_over = True
+            sess.completion_status = "declined"
+            background_tasks.add_task(speak, sess, "Understood. The interview is cancelled. Thank you for your time.")
             background_tasks.add_task(leave_call, bot_id)
+            if sess.session_id:
+                db.close_session(sess.session_id, "declined", 0)
+            with _registry_lock:
+                SESSIONS.pop(sess.bot_id, None)
+                if sess.routing_key:
+                    ROUTING.pop(sess.routing_key, None)
+            print(f"🚫 [{bot_id[:8]}] candidate declined consent → declined")
+            return {"status": "ok"}
         elif any(w in text.lower() for w in yes_words) or len(text.split()) <= 3:
             sess.interview_started = True
             sess.interview_start_time = time.time()

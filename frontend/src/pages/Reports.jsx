@@ -80,6 +80,26 @@ function NarrativeSection({ title, text }) {
   )
 }
 
+function IntegrityBadge({ flag }) {
+  const styles = {
+    clean:       { bg: '#ecfdf5', color: '#059669', label: 'Clean' },
+    minor:       { bg: '#fffbeb', color: '#d97706', label: 'Minor flags' },
+    significant: { bg: '#fef2f2', color: '#dc2626', label: 'Significant flags' },
+  }
+  const s = styles[flag] || { bg: '#f3f4f6', color: '#6b7280', label: flag || '—' }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 999,
+                   fontWeight: 600, fontSize: 12, background: s.bg, color: s.color }}>{s.label}</span>
+  )
+}
+
+const VIDEO_EVENT_LABELS = {
+  no_face: 'Candidate left the frame',
+  second_person: 'Second person on camera',
+  different_person: 'Different person (identity mismatch)',
+  phone_visible: 'Phone visible',
+}
+
 export default function Reports({ token, defaultSessionId }) {
   const [sessions, setSessions] = useState([])
   const [selectedId, setSelectedId] = useState('')
@@ -211,6 +231,9 @@ export default function Reports({ token, defaultSessionId }) {
                     <td>
                       <div className="font-semibold">{s.candidate_name || '—'}</div>
                       {s.candidate_email && <div className="text-xs text-secondary">{s.candidate_email}</div>}
+                      <div className="text-xs text-secondary" style={{ fontFamily: 'monospace' }} title={s.id}>
+                        ID: {s.id?.slice(0, 8)}
+                      </div>
                     </td>
                     <td className="text-secondary">{s.role || '—'}</td>
                     <td className="text-secondary text-sm">{fmtDate(s.scheduled_at || s.created_at)}</td>
@@ -267,6 +290,9 @@ export default function Reports({ token, defaultSessionId }) {
               <div>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{candidateName}</div>
                 <div className="text-secondary text-sm">{candidateRole}</div>
+                <div className="text-xs text-secondary" style={{ fontFamily: 'monospace', marginTop: 2 }}>
+                  Session ID: {selectedId}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <div style={{ textAlign: 'right' }}>
@@ -311,7 +337,82 @@ export default function Reports({ token, defaultSessionId }) {
             </div>
           ) : (
             <div className="card" style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
-              Recording is still processing — it can take a few minutes after the interview ends. Use ↻ to refresh.
+              Recording not available. If the interview just ended, it can take a few minutes to process —
+              use ↻ to refresh. For older interviews it may have expired on the provider.
+            </div>
+          )}
+
+          {/* Integrity (proctoring) */}
+          {fullData.integrity && (
+            <div className="card" style={{ padding: 20 }}>
+              <div className="flex-between" style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 600 }}>Integrity Review</div>
+                {fullData.integrity.assessed && <IntegrityBadge flag={fullData.integrity.integrity_flag} />}
+              </div>
+              {!fullData.integrity.assessed ? (
+                <div className="text-secondary text-sm">
+                  Not assessed{fullData.integrity.note ? ` — ${fullData.integrity.note}` : ''}.
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm" style={{ marginBottom: 10 }}>{fullData.integrity.summary}</div>
+                  {(fullData.integrity.transcript_authenticity?.flagged_answers || []).length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div className="text-xs text-secondary" style={{ marginBottom: 4 }}>Possibly AI-assisted answers</div>
+                      {fullData.integrity.transcript_authenticity.flagged_answers.map((f, i) => (
+                        <div key={i} className="text-sm" style={{ marginBottom: 4 }}>
+                          <span className="font-semibold">{f.topic}:</span>{' '}
+                          <span className="text-secondary">{f.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Video signals */}
+                  {fullData.integrity.video && (
+                    fullData.integrity.video.assessed ? (
+                      <div style={{ marginTop: 8, marginBottom: 4 }}>
+                        <div className="text-xs text-secondary" style={{ marginBottom: 6 }}>
+                          Video · face visible {fullData.integrity.video.face_present_pct}% of the time
+                          {fullData.integrity.video.camera_off ? ' · camera off' : ''}
+                          {fullData.integrity.video.same_person?.checked && (
+                            fullData.integrity.video.same_person.min_similarity != null
+                              ? ` · same-person similarity ${fullData.integrity.video.same_person.min_similarity} (≥${fullData.integrity.video.same_person.threshold} = same)`
+                              : ' · same-person: too few face frames')}
+                          {fullData.integrity.video.head_movement?.level && fullData.integrity.video.head_movement.level !== 'low'
+                            ? ` · head movement: ${fullData.integrity.video.head_movement.level} (low-confidence)` : ''}
+                        </div>
+                        {(fullData.integrity.video.events || []).map((e, i) => (
+                          <div key={i} style={{ marginBottom: 10 }}>
+                            <div className="text-sm">
+                              <span className="font-semibold">{VIDEO_EVENT_LABELS[e.type] || (e.type || '').replace(/_/g, ' ')}</span>
+                              <span className="text-secondary"> · at {e.at}
+                                {e.duration_s ? ` (${e.duration_s}s)` : ''}
+                                {e.confidence != null ? ` · ${Math.round(e.confidence * 100)}% conf` : ''}</span>
+                            </div>
+                            {e.frame && (
+                              <a href={e.frame} target="_blank" rel="noreferrer" title="Open full-size evidence frame">
+                                <img src={e.frame} alt={`${e.type} evidence at ${e.at}`}
+                                     style={{ marginTop: 4, width: 200, borderRadius: 6,
+                                              border: '1px solid #e5e7eb', display: 'block' }} />
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                        {(fullData.integrity.video.events || []).length === 0 && (
+                          <div className="text-sm text-secondary">No on-camera anomalies detected.</div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-secondary" style={{ marginTop: 8 }}>
+                        Video: {fullData.integrity.video.note || 'not assessed'}
+                      </div>
+                    )
+                  )}
+                  <div className="text-xs text-secondary" style={{ fontStyle: 'italic', marginTop: 6 }}>
+                    AI-generated signals for human review — not proof. Verify before acting.
+                  </div>
+                </>
+              )}
             </div>
           )}
 

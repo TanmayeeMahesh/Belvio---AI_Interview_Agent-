@@ -99,6 +99,11 @@ export default function Dashboard({ token }) {
   const [scheduled, setScheduled] = useState(null)
   const [scheduleError, setScheduleError] = useState('')
 
+  const [questions, setQuestions] = useState(null)     // HR-reviewable plan (null = not generated yet)
+  const [questionsLoading, setQuestionsLoading] = useState(false)
+  const [questionsError, setQuestionsError] = useState('')
+  const [newQ, setNewQ] = useState('')
+
   useEffect(() => {
     if (!token) return
     API.get('/api/hr/sessions', { headers: { authorization: `Bearer ${token}` } })
@@ -115,6 +120,7 @@ export default function Dashboard({ token }) {
   async function handleAnalyse() {
     if (!resume && !jd) { setAnalyseError('Upload at least one document.'); return }
     setAnalyseLoading(true); setAnalyseError(''); setAnalysis(null); setScheduled(null)
+    setQuestions(null); setQuestionsError('')
     try {
       const form = new FormData()
       if (resume) form.append('resume', resume)
@@ -134,14 +140,44 @@ export default function Dashboard({ token }) {
     setAnalyseLoading(false)
   }
 
+  async function handleGenerateQuestions() {
+    setQuestionsLoading(true); setQuestionsError('')
+    try {
+      const { data } = await API.post('/api/generate-questions', {
+        analysis, role, questionCount: parseInt(questionCount),
+      }, { headers: { authorization: `Bearer ${token}` } })
+      setQuestions(Array.isArray(data.questions) ? data.questions : [])
+    } catch (e) {
+      const msg = e.response?.data?.detail
+      setQuestionsError(typeof msg === 'string' ? msg : 'Could not generate the question plan. Check server logs.')
+    }
+    setQuestionsLoading(false)
+  }
+
+  function removeQuestion(idx) {
+    setQuestions(qs => (qs || []).filter((_, i) => i !== idx))
+  }
+
+  function addQuestion() {
+    const text = newQ.trim()
+    if (!text) return
+    setQuestions(qs => [...(qs || []), {
+      question: text, topic: 'Custom (HR)', question_type: 'custom',
+      depth: 'medium', target_skill: '', key_concepts: [],
+    }])
+    setNewQ('')
+  }
+
   async function handleSchedule() {
     if (!email.trim()) { setScheduleError('Candidate email is required to send the invite.'); return }
     if (!meetingUrl.trim()) { setScheduleError('Meeting link is required.'); return }
+    if (!questions || questions.length === 0) { setScheduleError('Generate and confirm the question plan first.'); return }
     setScheduleLoading(true); setScheduleError('')
     try {
       const { data } = await API.post('/api/schedule', {
         analysis, tempFiles, role,
         questionCount: parseInt(questionCount),
+        questions,                              // HR-reviewed plan (server persists exactly these)
         confirmedEmail: email,
         manualMeetingLink: meetingUrl,
         delayMinutes: parseInt(delayMinutes),
@@ -268,10 +304,65 @@ export default function Dashboard({ token }) {
               <input type="number" min={1} max={1440} value={delayMinutes} onChange={e => setDelayMinutes(e.target.value)} />
             </div>
           </div>
-          {scheduleError && <div className="text-danger text-sm" style={{ marginBottom: 10 }}>{scheduleError}</div>}
-          <button className="btn-primary" onClick={handleSchedule} disabled={scheduleLoading}>
-            {scheduleLoading ? 'Scheduling…' : 'Schedule Interview'}
-          </button>
+
+          {/* Step 1 — generate the plan for review (nothing is scheduled yet) */}
+          {!questions && (
+            <>
+              {questionsError && <div className="text-danger text-sm" style={{ marginBottom: 10 }}>{questionsError}</div>}
+              <button className="btn-primary" onClick={handleGenerateQuestions} disabled={questionsLoading}>
+                {questionsLoading ? 'Generating plan…' : 'Generate Question Plan'}
+              </button>
+              <div className="text-secondary text-xs" style={{ marginTop: 8 }}>
+                You'll review and edit the questions before the interview is scheduled.
+              </div>
+            </>
+          )}
+
+          {/* Step 2 — review / edit the plan, then confirm to schedule */}
+          {questions && (
+            <div style={{ marginTop: 4 }}>
+              <div className="flex-between" style={{ marginBottom: 6 }}>
+                <div style={{ fontWeight: 600 }}>Question Plan — review before scheduling ({questions.length})</div>
+                <button className="btn-ghost btn-sm" onClick={handleGenerateQuestions} disabled={questionsLoading}>
+                  {questionsLoading ? 'Regenerating…' : '↻ Regenerate'}
+                </button>
+              </div>
+              <div className="text-secondary text-xs" style={{ marginBottom: 10 }}>
+                Remove any question with ✕ or add your own with +. The interview will ask exactly these, in order.
+              </div>
+
+              {questions.map((q, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 10px',
+                                      border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginBottom: 6 }}>
+                  <div className="text-secondary text-sm" style={{ minWidth: 20, textAlign: 'right' }}>{i + 1}.</div>
+                  <div style={{ flex: 1 }}>
+                    <div className="text-sm">{q.question}</div>
+                    <div className="text-xs text-secondary" style={{ marginTop: 2 }}>
+                      {q.topic || 'General'}{q.depth ? ` · ${q.depth}` : ''}
+                      {q.question_type === 'custom' ? ' · added by you' : ''}
+                    </div>
+                  </div>
+                  <button className="btn-ghost btn-sm" title="Remove this question" onClick={() => removeQuestion(i)}
+                          style={{ color: '#dc2626', fontWeight: 700, lineHeight: 1 }}>✕</button>
+                </div>
+              ))}
+
+              {/* add a custom question */}
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <input value={newQ} onChange={e => setNewQ(e.target.value)} placeholder="Add a custom question…"
+                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addQuestion() } }}
+                       style={{ flex: 1 }} />
+                <button className="btn-ghost" onClick={addQuestion} title="Add question"
+                        style={{ minWidth: 70, fontWeight: 600 }}>+ Add</button>
+              </div>
+
+              {scheduleError && <div className="text-danger text-sm" style={{ marginTop: 12 }}>{scheduleError}</div>}
+              <button className="btn-primary" onClick={handleSchedule}
+                      disabled={scheduleLoading || questions.length === 0} style={{ marginTop: 12 }}>
+                {scheduleLoading ? 'Scheduling…' : `Confirm & Schedule Interview (${questions.length} questions)`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -299,7 +390,7 @@ export default function Dashboard({ token }) {
               </div>
             </div>
           </div>
-          <button className="btn-ghost btn-sm" onClick={() => { setScheduled(null); setAnalysis(null); setResume(null); setJd(null); setEmail(''); setMeetingUrl('') }} style={{ marginTop: 14 }}>
+          <button className="btn-ghost btn-sm" onClick={() => { setScheduled(null); setAnalysis(null); setResume(null); setJd(null); setEmail(''); setMeetingUrl(''); setQuestions(null); setNewQ('') }} style={{ marginTop: 14 }}>
             + Schedule another
           </button>
         </div>

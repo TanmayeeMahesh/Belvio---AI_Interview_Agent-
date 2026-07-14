@@ -9,6 +9,9 @@ token.json
 # Python
 .venv/
 __pycache__/
+
+# Proctoring CV models (baked into the Docker image at build time; fetched locally via fetch_models.py)
+models/
 *.pyc
 *.pyo
 *.pyd

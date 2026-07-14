@@ -394,6 +394,7 @@ def get_session_full(session_id) -> dict:
             "questions": get_questions(session_id),
             "answers": _pair_transcript(read_answers(session_id), report.get("per_topic")),
             "report": report or None,
+            "integrity": get_integrity_report(session_id) or None,   # proctoring signals (server-side join)
         }
     except Exception as e:
         print(f"[ERROR] get_session_full() failed: {e}")
@@ -429,6 +430,21 @@ def list_stuck_sessions(older_than_minutes: int = 120) -> list:
         return []
 
 
+def list_stale_scheduled_sessions(older_than_minutes: int = 30) -> list:
+    """Sessions still 'scheduled' whose scheduled_at is well past — candidate never joined → no_show."""
+    db = _db()
+    if not db:
+        return []
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+        res = (db.table("sessions").select("id, scheduled_at")
+               .eq("status", "scheduled").lt("scheduled_at", cutoff).execute())
+        return res.data or []
+    except Exception as e:
+        print(f"❌ list_stale_scheduled_sessions() failed: {e}")
+        return []
+
+
 def get_report(session_id) -> dict:
     """Read the report row for a session."""
     db = _db()
@@ -440,3 +456,23 @@ def get_report(session_id) -> dict:
     except Exception as e:
         print(f"[ERROR] get_report() failed: {e}")
         return {}
+
+
+# ─── PROCTORING / INTEGRITY (separate table → no write race with reports) ──
+def save_integrity_report(session_id: str, data: dict) -> None:
+    """Upsert the integrity/proctoring result (one row per session). Fail-safe."""
+    if not session_id:
+        return
+    row = {"session_id": session_id, **data}
+    _exec(lambda db: db.table("integrity_reports").upsert(row, on_conflict="session_id").execute(),
+          label="save_integrity_report")
+
+
+def get_integrity_report(session_id: str) -> dict:
+    """Read the integrity/proctoring row for a session (empty dict if none)."""
+    if not session_id:
+        return {}
+    def op(db):
+        res = db.table("integrity_reports").select("*").eq("session_id", session_id).execute()
+        return res.data[0] if res.data else {}
+    return _exec(op, default={}, label="get_integrity_report")
