@@ -3,9 +3,15 @@ uvicorn[standard]
 python-dotenv
 requests
 groq
+google-generativeai      # Gemini for the interview LLM stack (llm_stack.py)
 gtts
 supabase
 pypdf
 reportlab
 cryptography
 python-multipart
+
+# ── Proctoring video analysis (local CV stack, CPU-only, no cloud) ──
+opencv-python-headless   # frame decode + YuNet/SFace via OpenCV DNN (headless = no GUI libs)
+onnxruntime              # YOLOX-Nano phone detection (CPU; no PyTorch)
+numpy                    # array ops for YOLOX pre/post-processing

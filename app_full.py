@@ -223,17 +223,24 @@ def _find_download_url(obj):
                 return found
     return None
 
-def get_fresh_recording_url(bot_id):
-    """Re-fetch a CURRENT pre-signed recording URL from Recall on demand.
-    Recall's download URLs expire in hours, so we never reuse a cached one — we ask for a fresh
-    link each time the dashboard wants to play/download the recording."""
+def get_fresh_recording_url(bot_id, kind="audio"):
+    """Re-fetch a CURRENT pre-signed recording URL from Recall on demand (they expire in hours).
+    kind: "audio" → the mixed-audio track (report player); "video" → the mixed-video track (proctoring).
+    Prefers a media_shortcut whose key matches `kind`; falls back to any available download URL."""
     if not bot_id:
         return None
     try:
         r = requests.get(f"{RECALL_BASE}/bot/{bot_id}/", headers=recall_headers())
         if r.status_code == 200:
             for rec in r.json().get("recordings", []):
-                url = _find_download_url(rec)
+                shortcuts = rec.get("media_shortcuts") or {}
+                # prefer the track matching the requested kind (e.g. "video_mixed" for kind="video")
+                for key, node in shortcuts.items():
+                    if kind in key:
+                        url = ((node or {}).get("data") or {}).get("download_url")
+                        if url:
+                            return url
+                url = _find_download_url(rec)   # fallback: any download_url
                 if url:
                     return url
         else:
@@ -775,7 +782,8 @@ def deploy_bot(meeting_url: str, session_id: str = None) -> dict:
     payload = {
         "bot_name": BOT_NAME, "meeting_url": meeting_url,
         "recording_config": {
-            "audio_mixed_mp4": {},   # both bot TTS + candidate voice, audio-only (US-AG-06)
+            "audio_mixed_mp4": {},   # both bot TTS + candidate voice (used for the report's player)
+            "video_mixed_mp4": {},   # candidate video — sampled post-interview for proctoring (Mode A)
             # force the bot's own output_audio into the mix (bypasses platform echo cancellation,
             # which otherwise leaves only the candidate's voice in the recording). Default is false.
             "include_bot_in_recording": {"audio": True},
@@ -850,7 +858,7 @@ async def schedule_interview(request: Request):
     if not meeting_url:
         return {"status": "error", "detail": "meeting_url is required"}
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay)
-    when_human = scheduled_for.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    when_human = scheduled_for.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M") + " IST"
     row = db.create_scheduled_interview(meeting_url=meeting_url,
         scheduled_for_iso=scheduled_for.isoformat(), candidate_email=email or None,
         candidate_name=name or None, role=role or None)
