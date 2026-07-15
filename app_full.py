@@ -314,9 +314,16 @@ def no_show_watchdog(sess: Session):
             return
     if not sess.interview_started and get_session(sess.bot_id) is sess:
         print(f"⏰ [{sess.bot_id[:8]}] no consent — leaving")
+        sess.interview_over = True
         sess.completion_status = "no_show"
         speak(sess, "I haven't received a response, so I'll end the session now. Thank you.")
         leave_call(sess.bot_id)
+        if sess.session_id:
+            db.close_session(sess.session_id, "no_show", 0)   # persist now (was missing → row stuck 'scheduled')
+        with _registry_lock:
+            SESSIONS.pop(sess.bot_id, None)
+            if sess.routing_key:
+                ROUTING.pop(sess.routing_key, None)
 
 def cap_watchdog(sess: Session):
     while get_session(sess.bot_id) is sess and not sess.interview_over:
