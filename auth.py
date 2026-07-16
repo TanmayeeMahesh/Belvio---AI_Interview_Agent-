@@ -90,7 +90,6 @@ def verify_token(authorization: str):
 def user_id_from(user) -> str:
     return getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
 
-
 def get_user_context(user_id: str):
     db = _db()
 
@@ -102,17 +101,18 @@ def get_user_context(user_id: str):
             db.table("organization_users")
             .select("*")
             .eq("user_id", user_id)
-            .single()
             .execute()
         )
 
-        return res.data
+        if not res.data:
+            print(f"❌ No organization user found for {user_id}")
+            return None
+
+        return res.data[0]
 
     except Exception as e:
         print(f"❌ get_user_context failed: {e}")
         return None
-
-
 
 
 # ─── API KEY STORAGE (encrypted, masked) ──────────────────

@@ -20,6 +20,7 @@ export default function Organizations() {
     });
 
     setName("");
+
     loadOrganizations();
   }
 
@@ -32,7 +33,15 @@ export default function Organizations() {
     <div style={{ padding: 24 }}>
       <h1>Organizations</h1>
 
-      <div style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          marginBottom: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          maxWidth: 500,
+        }}
+      >
         <input
           placeholder="Organization Name"
           value={name}

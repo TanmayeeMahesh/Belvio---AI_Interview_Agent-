@@ -1,20 +1,20 @@
 """
-api_routes.py — HR-facing API matching the other team's frontend contract.
+    api_routes.py — HR-facing API matching the other team's frontend contract.
 
-Their React dashboard calls these (via axios at localhost:8000):
-  POST /api/analyse            multipart: resume, jd, role  → {analysis, tempFiles}
-  POST /api/schedule           json: {analysis, role, questionCount, confirmedEmail,
-                                      manualMeetingLink, meetingPlatform} → {scheduled_at, ...}
-  GET  /api/hr/sessions        → [{id, candidate_name, role, status, scheduled_at, created_at}]
-  GET  /api/hr/session/{id}    → full session detail
-  GET  /api/hr/report/{id}     → report row
-  GET  /api/hr/report/{id}/pdf → the generated PDF (download)
-  GET  /api/keys               → masked per-user API keys (sidebar)
-  POST /api/keys               json: {gemini, claude, groq} → store encrypted
+    Their React dashboard calls these (via axios at localhost:8000):
+    POST /api/analyse            multipart: resume, jd, role  → {analysis, tempFiles}
+    POST /api/schedule           json: {analysis, role, questionCount, confirmedEmail,
+                                        manualMeetingLink, meetingPlatform} → {scheduled_at, ...}
+    GET  /api/hr/sessions        → [{id, candidate_name, role, status, scheduled_at, created_at}]
+    GET  /api/hr/session/{id}    → full session detail
+    GET  /api/hr/report/{id}     → report row
+    GET  /api/hr/report/{id}/pdf → the generated PDF (download)
+    GET  /api/keys               → masked per-user API keys (sidebar)
+    POST /api/keys               json: {gemini, claude, groq} → store encrypted
 
-Wires together: extraction (US-AG-01/02), scheduler (invite+schedule), auth (login/keys),
-report_pdf (US-AG-08 AC-06), and our Supabase via db.py.
-"""
+    Wires together: extraction (US-AG-01/02), scheduler (invite+schedule), auth (login/keys),
+    report_pdf (US-AG-08 AC-06), and our Supabase via db.py.
+    """
 import os, uuid, json
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, UploadFile, File, Form, Request, Header, HTTPException
@@ -42,6 +42,11 @@ class CheckEmailRequest(BaseModel):
 class CompleteRegistrationRequest(BaseModel):
     email: str
     password: str
+    
+class CreateHRRequest(BaseModel):
+    email: str
+    name: str = None
+    role: str = "HR"
 
 
 class CreateOrganizationRequest(BaseModel):
@@ -52,7 +57,7 @@ class CreateOrganizationRequest(BaseModel):
 class CompleteRegistrationRequest(BaseModel):
     email: str
     password: str    
- 
+
 class CreateJobOpeningRequest(BaseModel):
     title: str
     description: str
@@ -61,7 +66,7 @@ class CreateJobOpeningRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     email_template: str = None
- 
+
 class CreateCandidateRequest(BaseModel):
     name: str
     email: str
@@ -224,7 +229,7 @@ def org_admin_dashboard(
         "candidates": candidates.count,
         "scheduled_interviews": interviews.count
     }
-     
+    
 @router.get("/api/dashboard/super-admin")
 def super_admin_dashboard():
 
@@ -339,7 +344,7 @@ def list_job_openings(
 
     return result.data
     
- 
+
     
         
     
@@ -347,6 +352,7 @@ def list_job_openings(
 async def complete_registration(
     body: CompleteRegistrationRequest
 ):
+    print("🔥 COMPLETE REGISTRATION FUNCTION HIT 🔥")
 
     email = body.email.strip().lower()
     password = body.password
@@ -367,47 +373,86 @@ async def complete_registration(
 
     org_user = existing.data[0]
 
-    if org_user["status"] == "ACTIVE":
+    if org_user["status"] == "ACTIVE" and org_user.get("user_id"):
         raise HTTPException(
             status_code=400,
             detail="Account already activated"
         )
 
-    sb = db._db()
+    # Fresh Supabase Auth client
+    sb = _supa_create(
+        _os.getenv("SUPABASE_URL"),
+        _os.getenv("SUPABASE_KEY")
+    )
 
-    auth_user = sb.auth.sign_up({
-        "email": email,
-        "password": password
-    })
-    
-    print("AUTH USER =", auth_user)
-    print("AUTH USER ID =", auth_user.user.id if auth_user.user else None)
+    try:
+        auth_user = sb.auth.sign_up({
+            "email": email,
+            "password": password
+        })
 
-    user_id = auth_user.user.id
+        print("AUTH USER =", auth_user)
 
-    (
+        user_id = auth_user.user.id
+
+    except Exception as e:
+
+        print("SIGNUP ERROR =", str(e))
+
+        if "already registered" in str(e).lower():
+
+            login_user = sb.auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
+
+            user_id = login_user.user.id
+
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
+
+    print("ORG USER BEFORE UPDATE =", org_user)
+    print("NEW AUTH USER ID =", user_id)
+
+    # DEBUG
+    all_rows = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .execute()
+    )
+
+    print("ALL ORG USERS =", all_rows.data)
+
+    update_result = (
         db._db()
         .table("organization_users")
         .update({
             "user_id": user_id,
             "status": "ACTIVE"
         })
-        .eq("id", org_user["id"])
+        .eq("email", email)
         .execute()
     )
+
+    print("UPDATE RESULT =", update_result.data)
+
+    verify = (
+        db._db()
+        .table("organization_users")
+        .select("*")
+        .eq("email", email)
+        .execute()
+    )
+
+    print("VERIFY =", verify.data)
 
     return {
         "message": "Registration completed"
     }
-    
- 
-class CreateHRRequest(BaseModel):
-    email: str
-    name: str = None
-    role: str = "HR"
-
-
-
 @router.post("/api/auth/check-email")
 async def check_email(body: CheckEmailRequest):
 
@@ -482,34 +527,7 @@ async def create_hr(
 
     return result.data[0]            
 
-
-async def check_email(body: CheckEmailRequest):
-
-    email = body.email.strip().lower()
-
-    result = (
-        db._db()
-        .table("organization_users")
-        .select("*")
-        .eq("email", email)
-        .execute()
-    )
-
-    if not result.data:
-        raise HTTPException(
-            status_code=404,
-            detail="Email not found"
-        )
-
-    user = result.data[0]
-
-    return {
-        "exists": True,
-        "status": user["status"],
-        "role": user["role"]
-    }
     
-        
 # ─── AUTH LOGIN ───────────────────────────────────────────
 @router.post("/api/auth/login")
 async def login(request: Request):
@@ -582,9 +600,9 @@ def _require_context(authorization: str):
     return user, ctx
 
 
-  
 
- 
+
+
 @router.post("/api/admin/invite-org-admin")
 async def invite_org_admin(
     request: Request,
@@ -633,7 +651,7 @@ def test_invites():
     )
 
     return result.data
- 
+
     
     
 @router.get("/api/whoami")
@@ -1013,7 +1031,7 @@ def schedule_candidate(
         "email_sent": email_ok,
         "questions_generated": len(questions)
     }
- 
+
     
 @router.delete("/api/admin/organizations/{organization_id}")
 def delete_organization(
@@ -1062,8 +1080,8 @@ def list_interviews(
 # ─── US-AG-01: upload + parse JD/resume ───────────────────
 @router.post("/api/analyse")
 async def analyse(resume: UploadFile = File(None), jd: UploadFile = File(None),
-                  role: str = Form("Software Engineer"),
-                  authorization: str = Header(None)):
+                role: str = Form("Software Engineer"),
+                authorization: str = Header(None)):
     user = _require_user(authorization)
     keys = auth.get_user_keys_decrypted(auth.user_id_from(user))  # per-user LLM keys
 
@@ -1225,7 +1243,7 @@ async def schedule(request: Request, authorization: str = Header(None)):
 
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
     db.update_session_analysis(session_id, analysis, meeting_url, scheduled_for.isoformat(),
-                               temp.get("jd_text"), temp.get("resume_text"))
+                            temp.get("jd_text"), temp.get("resume_text"))
     db.save_questions(session_id, questions)
 
     # 3. create the scheduled-interview row (the worker auto-deploys the bot at scheduled_for)
@@ -1303,7 +1321,7 @@ def hr_report_pdf(session_id: str, authorization: str = Header(None)):
     report["per_topic"] = report.get("per_topic", [])
     report["candidate"] = db.get_candidate_for_session(session_id)
     transcript = [{"speaker": a["speaker"], "text": a["text"],
-                   "timestamp": a.get("created_at", "")} for a in db.read_answers(session_id)]
+                "timestamp": a.get("created_at", "")} for a in db.read_answers(session_id)]
     path = report_pdf.build_report_pdf(report, transcript, out_dir="uploads/reports")
     return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
 
@@ -1319,8 +1337,8 @@ async def set_keys(request: Request, authorization: str = Header(None)):
     user = _require_user(authorization)
     body = await request.json()
     ok = auth.save_user_keys(auth.user_id_from(user),
-                             {"gemini": body.get("gemini"), "claude": body.get("claude"),
-                              "groq": body.get("groq")})
+                            {"gemini": body.get("gemini"), "claude": body.get("claude"),
+                            "groq": body.get("groq")})
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to save keys")
     return {"status": "saved", "keys": auth.get_user_keys_masked(auth.user_id_from(user))}
